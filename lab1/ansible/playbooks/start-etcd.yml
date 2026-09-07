@@ -1,0 +1,42 @@
+---
+- name: Start the three-member etcd cluster
+  hosts: patroni_nodes
+  become: true
+  gather_facts: false
+  strategy: free
+  tasks:
+    - name: Enable and start etcd
+      ansible.builtin.systemd:
+        name: etcd
+        enabled: true
+        state: started
+
+- name: Verify etcd quorum and all three endpoints
+  hosts: lab1-pg1
+  become: true
+  gather_facts: false
+  vars:
+    lab1_etcd_endpoints: "{% for host in groups['patroni_nodes'] %}http://{{ hostvars[host].lab1_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
+  tasks:
+    - name: Wait for every etcd endpoint to be healthy
+      ansible.builtin.command: >-
+        etcdctl --endpoints={{ lab1_etcd_endpoints }} endpoint health
+      environment:
+        ETCDCTL_API: "3"
+      register: lab1_etcd_health
+      retries: 12
+      delay: 5
+      until: lab1_etcd_health.rc == 0
+      changed_when: false
+
+    - name: List etcd members
+      ansible.builtin.command: >-
+        etcdctl --endpoints={{ lab1_etcd_endpoints }} member list --write-out=table
+      environment:
+        ETCDCTL_API: "3"
+      register: lab1_etcd_members
+      changed_when: false
+
+    - name: Show etcd membership
+      ansible.builtin.debug:
+        var: lab1_etcd_members.stdout_lines

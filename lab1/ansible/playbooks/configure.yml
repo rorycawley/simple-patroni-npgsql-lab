@@ -1,0 +1,16 @@
+---
+- name: Configure the Lab 1 cluster services
+  hosts: patroni_nodes
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../../.secrets/cluster.yml"
+
+  pre_tasks:
+    - name: Record the three node IP addresses
+      ansible.builtin.set_fact:
+        lab1_peer_ips: "{{ groups['patroni_nodes'] | map('extract', hostvars, 'lab1_node_ip') | list }}"
+        lab1_host_gateway_ip: "{{ lab1_node_ip | regex_replace('\\.[0-9]+$', '.1') }}"
+
+  roles:
+    - role: cluster_config

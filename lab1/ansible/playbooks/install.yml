@@ -1,0 +1,25 @@
+---
+- name: Install the Lab 1 PostgreSQL node baseline
+  hosts: patroni_nodes
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify the complete three-node inventory is available
+      ansible.builtin.assert:
+        that:
+          - groups['patroni_nodes'] | length == 3
+          - hostvars[item].lab1_node_ip is defined
+        fail_msg: Run make create_vms before this playbook.
+      loop: "{{ groups['patroni_nodes'] }}"
+
+    - name: Record the three node IP addresses
+      ansible.builtin.set_fact:
+        lab1_peer_ips: "{{ groups['patroni_nodes'] | map('extract', hostvars, 'lab1_node_ip') | list }}"
+
+    - name: Record the macOS address on the Lima shared subnet
+      ansible.builtin.set_fact:
+        lab1_host_gateway_ip: "{{ lab1_node_ip | regex_replace('\\.[0-9]+$', '.1') }}"
+
+  roles:
+    - role: postgres_node

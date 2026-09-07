@@ -1,0 +1,22 @@
+---
+lab1_cluster_name: lab1
+lab1_patroni_namespace: /service/
+lab1_postgres_data_dir: /var/lib/pgsql/data
+lab1_postgres_bin_dir: /usr/pgsql-18/bin
+lab1_etcd_data_dir: /var/lib/etcd/lab1
+lab1_lima_management_cidr: 192.168.5.0/24
+
+# The macOS side of Lima's managed shared network. It is the only non-cluster
+# source allowed to reach PostgreSQL.
+lab1_postgres_client_cidrs:
+  - "{{ lab1_host_gateway_ip }}/32"
+
+lab1_firewall_interfaces:
+  - eth0
+  - lima0
+
+lab1_cluster_ports:
+  - 2379 # etcd client
+  - 2380 # etcd peer
+  - 5432 # PostgreSQL and streaming replication
+  - 8008 # Patroni REST API

@@ -1,0 +1,77 @@
+namespace: {{ lab1_patroni_namespace }}
+scope: {{ lab1_cluster_name }}
+name: {{ lab1_node_name }}
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: {{ lab1_node_ip }}:8008
+
+etcd3:
+  hosts: {% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab1_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    primary_start_timeout: 0
+    maximum_lag_on_failover: 1048576
+    check_timeline: true
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_log_hints: "on"
+        password_encryption: scram-sha-256
+        ssl: "off"
+        archive_mode: "on"
+        archive_timeout: 60s
+        archive_command: pgbackrest --stanza={{ lab1_cluster_name }} archive-push %p
+      pg_hba:
+        - local all all peer
+        - host all all 127.0.0.1/32 scram-sha-256
+        - host replication replicator 127.0.0.1/32 scram-sha-256
+{% for host in groups['patroni_nodes'] %}
+        - host replication replicator {{ hostvars[host].lab1_node_ip }}/32 scram-sha-256
+        - host postgres postgres {{ hostvars[host].lab1_node_ip }}/32 scram-sha-256
+{% endfor %}
+        - host appdb app_runtime {{ lab1_host_gateway_ip }}/32 scram-sha-256
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+postgresql:
+  cluster_name: {{ lab1_cluster_name }}
+  listen: 0.0.0.0:5432
+  connect_address: {{ lab1_node_ip }}:5432
+  data_dir: {{ lab1_postgres_data_dir }}
+  bin_dir: {{ lab1_postgres_bin_dir }}
+  pgpass: /var/lib/pgsql/.pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: {{ postgres_replication_password | to_json }}
+    superuser:
+      username: postgres
+      password: {{ postgres_superuser_password | to_json }}
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+  create_replica_methods:
+    - basebackup
+  basebackup:
+    checkpoint: fast
+
+watchdog:
+  mode: required
+  device: /dev/watchdog
+  safety_margin: 5
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

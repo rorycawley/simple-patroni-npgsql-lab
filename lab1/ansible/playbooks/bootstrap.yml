@@ -1,0 +1,45 @@
+---
+- name: Bootstrap Patroni nodes one at a time
+  hosts: patroni_nodes
+  serial: 1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Enable and start Patroni
+      ansible.builtin.systemd:
+        name: percona-patroni
+        enabled: true
+        state: started
+
+    - name: Wait for PostgreSQL to become healthy on this node
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/health
+        status_code: 200
+      register: lab1_postgres_health
+      retries: 60
+      delay: 2
+      until: lab1_postgres_health.status == 200
+
+- name: Reconcile and verify the Patroni distributed configuration
+  hosts: lab1-pg1
+  become: true
+  become_user: postgres
+  gather_facts: false
+  tasks:
+    - name: Apply the desired Patroni distributed configuration
+      ansible.builtin.command: >-
+        patronictl -c /etc/patroni/patroni.yml edit-config {{ lab1_cluster_name }}
+        --apply /etc/patroni/dcs.yml --force
+      register: lab1_patroni_config
+      changed_when: "'Not changed' not in lab1_patroni_config.stdout"
+
+    - name: Wait for all three Patroni members
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml list --format=json
+      register: lab1_patroni_members
+      retries: 30
+      delay: 2
+      until:
+        - (lab1_patroni_members.stdout | from_json | length) == 3
+        - (lab1_patroni_members.stdout | from_json | selectattr('Role', 'equalto', 'Leader') | list | length) == 1
+        - (lab1_patroni_members.stdout | from_json | selectattr('Role', 'equalto', 'Replica') | selectattr('State', 'equalto', 'streaming') | list | length) == 2
+      changed_when: false

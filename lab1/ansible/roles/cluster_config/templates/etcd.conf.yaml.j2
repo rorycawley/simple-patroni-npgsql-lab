@@ -1,0 +1,10 @@
+name: "{{ lab1_node_name }}"
+initial-cluster-token: "lab1-postgresql-ha"
+initial-cluster-state: "new"
+initial-cluster: "{% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab1_node_name }}=http://{{ hostvars[host].lab1_node_ip }}:2380{% if not loop.last %},{% endif %}{% endfor %}"
+data-dir: "{{ lab1_etcd_data_dir }}"
+initial-advertise-peer-urls: "http://{{ lab1_node_ip }}:2380"
+listen-peer-urls: "http://{{ lab1_node_ip }}:2380"
+advertise-client-urls: "http://{{ lab1_node_ip }}:2379"
+listen-client-urls: "http://127.0.0.1:2379,http://{{ lab1_node_ip }}:2379"
+enable-v2: false

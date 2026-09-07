@@ -21,6 +21,7 @@ coverage/
 .env.*
 !.env.example
 .secrets/
+.ansible/
 *.pgpass
 *.key
 *.pem

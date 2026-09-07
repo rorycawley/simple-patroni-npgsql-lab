@@ -1,0 +1,103 @@
+---
+- name: Verify every Lab 1 cluster component
+  hosts: patroni_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert required services and watchdog are active
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['firewalld.service'].state == 'running'
+          - ansible_facts.services['etcd.service'].state == 'running'
+          - ansible_facts.services['etcd.service'].status == 'enabled'
+          - ansible_facts.services['percona-patroni.service'].state == 'running'
+          - ansible_facts.services['percona-patroni.service'].status == 'enabled'
+          - ansible_facts.services['postgresql-18.service'].status == 'disabled'
+        fail_msg: One or more required services have an unexpected state.
+
+    - name: Read the active firewall default zone
+      ansible.builtin.command: firewall-cmd --get-default-zone
+      register: lab1_firewall_default_zone
+      changed_when: false
+
+    - name: Read broadly allowed firewall services
+      ansible.builtin.command: firewall-cmd --zone=drop --list-services
+      register: lab1_firewall_services
+      changed_when: false
+
+    - name: Read broadly allowed firewall ports
+      ansible.builtin.command: firewall-cmd --zone=drop --list-ports
+      register: lab1_firewall_ports
+      changed_when: false
+
+    - name: Read interfaces protected by the drop zone
+      ansible.builtin.command: firewall-cmd --zone=drop --list-interfaces
+      register: lab1_firewall_interfaces
+      changed_when: false
+
+    - name: Assert the firewall remains default-deny
+      ansible.builtin.assert:
+        that:
+          - lab1_firewall_default_zone.stdout | trim == 'drop'
+          - lab1_firewall_services.stdout | trim == ''
+          - lab1_firewall_ports.stdout | trim == ''
+          - "'eth0' in lab1_firewall_interfaces.stdout.split()"
+          - "'lima0' in lab1_firewall_interfaces.stdout.split()"
+
+    - name: Check watchdog device ownership
+      ansible.builtin.stat:
+        path: /dev/watchdog
+      register: lab1_watchdog
+
+    - name: Assert Patroni can access the watchdog device
+      ansible.builtin.assert:
+        that:
+          - lab1_watchdog.stat.exists
+          - lab1_watchdog.stat.pw_name == 'postgres'
+          - lab1_watchdog.stat.mode == '0600'
+
+- name: Verify etcd, Patroni, replication, and pgBackRest
+  hosts: lab1-pg1
+  become: true
+  gather_facts: false
+  vars:
+    lab1_etcd_endpoints: "{% for host in groups['patroni_nodes'] %}http://{{ hostvars[host].lab1_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
+  tasks:
+    - name: Verify all etcd endpoints
+      ansible.builtin.command: etcdctl --endpoints={{ lab1_etcd_endpoints }} endpoint health
+      environment:
+        ETCDCTL_API: "3"
+      changed_when: false
+
+    - name: Read Patroni topology
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml list --format=json
+      become_user: postgres
+      register: lab1_patroni_topology
+      changed_when: false
+
+    - name: Assert one leader and two healthy replicas
+      ansible.builtin.assert:
+        that:
+          - (lab1_patroni_topology.stdout | from_json | length) == 3
+          - (lab1_patroni_topology.stdout | from_json | selectattr('Role', 'equalto', 'Leader') | list | length) == 1
+          - (lab1_patroni_topology.stdout | from_json | selectattr('State', 'equalto', 'streaming') | list | length) == 2
+
+    - name: Identify the current primary inventory host
+      ansible.builtin.set_fact:
+        lab1_primary_inventory_host: >-
+          lab1-{{ (lab1_patroni_topology.stdout | from_json
+          | selectattr('Role', 'equalto', 'Leader') | map(attribute='Member') | first) }}
+
+    - name: Check pgBackRest on the current primary
+      ansible.builtin.command: pgbackrest --stanza={{ lab1_cluster_name }} check
+      become_user: postgres
+      register: lab1_pgbackrest_check
+      changed_when: false
+      delegate_to: "{{ lab1_primary_inventory_host }}"
+
+    - name: Show Patroni topology
+      ansible.builtin.debug:
+        var: lab1_patroni_topology.stdout

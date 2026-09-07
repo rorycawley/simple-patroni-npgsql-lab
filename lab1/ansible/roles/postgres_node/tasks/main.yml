@@ -1,0 +1,128 @@
+---
+- name: Install repository prerequisites and firewalld
+  ansible.builtin.dnf:
+    name:
+      - curl
+      - dnf-plugins-core
+      - epel-release
+      - firewalld
+      - python3-firewall
+    state: present
+
+- name: Disable Rocky Linux's PostgreSQL module
+  ansible.builtin.command: dnf -y module disable postgresql
+  changed_when: false
+
+- name: Enable Rocky Linux CodeReady Builder dependencies
+  ansible.builtin.command: dnf config-manager --set-enabled crb
+  changed_when: false
+
+- name: Enable EPEL packages required by Patroni and pgBackRest
+  ansible.builtin.command: dnf config-manager --set-enabled epel
+  changed_when: false
+
+- name: Import Percona's RPM packaging key
+  ansible.builtin.rpm_key:
+    key: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
+    state: present
+
+- name: Install Percona's repository management package
+  ansible.builtin.dnf:
+    name: https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+    state: present
+
+- name: Enable the Percona PostgreSQL 18 repository
+  ansible.builtin.command: percona-release setup ppg18
+  changed_when: false
+
+- name: Install the Percona PostgreSQL HA node packages
+  ansible.builtin.dnf:
+    name:
+      - percona-postgresql18-server
+      - percona-patroni
+      - percona-pgbackrest
+      - etcd
+      - python3-python-etcd
+      - python3-pip
+      - python3-devel
+      - binutils
+    state: present
+
+- name: Gather installed service facts
+  ansible.builtin.service_facts:
+
+- name: Keep independently managed PostgreSQL and packaged Patroni services disabled
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - postgresql-18
+    - patroni
+  when: item ~ '.service' in ansible_facts.services
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: Set the drop zone to default-deny
+  ansible.posix.firewalld:
+    zone: drop
+    target: DROP
+    state: present
+    permanent: true
+    immediate: false
+
+- name: Load the permanent drop-zone configuration
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+
+- name: Allow Lima's isolated management network to use SSH
+  ansible.posix.firewalld:
+    zone: drop
+    rich_rule: >-
+      rule family="ipv4" source address="{{ lab1_lima_management_cidr }}"
+      port port="22" protocol="tcp" accept
+    state: enabled
+    permanent: true
+    immediate: true
+
+- name: Allow cluster nodes to communicate with etcd, PostgreSQL, and Patroni
+  ansible.posix.firewalld:
+    zone: drop
+    rich_rule: >-
+      rule family="ipv4" source address="{{ item.0 }}/32"
+      port port="{{ item.1 }}" protocol="tcp" accept
+    state: enabled
+    permanent: true
+    immediate: true
+  with_nested:
+    - "{{ lab1_peer_ips }}"
+    - "{{ lab1_cluster_ports }}"
+
+- name: Allow the explicitly configured application CIDRs to reach PostgreSQL
+  ansible.posix.firewalld:
+    zone: drop
+    rich_rule: >-
+      rule family="ipv4" source address="{{ item }}"
+      port port="5432" protocol="tcp" accept
+    state: enabled
+    permanent: true
+    immediate: true
+  loop: "{{ lab1_postgres_client_cidrs }}"
+
+- name: Assign the VM network interfaces to the drop zone
+  ansible.posix.firewalld:
+    zone: drop
+    interface: "{{ item }}"
+    state: enabled
+    permanent: true
+    immediate: true
+  loop: "{{ lab1_firewall_interfaces }}"
+
+- name: Make the drop zone the system default
+  ansible.builtin.command: firewall-cmd --set-default-zone=drop
+  register: lab1_default_zone
+  changed_when: false
