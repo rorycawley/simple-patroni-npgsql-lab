@@ -1,0 +1,31 @@
+# .NET build and test output
+[Bb]in/
+[Oo]bj/
+[Tt]est[Rr]esult*/
+artifacts/
+coverage/
+*.coverage
+*.coveragexml
+
+# IDE and operating-system files
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.DS_Store
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.secrets/
+*.pgpass
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Logs
+*.log
