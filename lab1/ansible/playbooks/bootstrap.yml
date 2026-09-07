@@ -20,6 +20,17 @@
       delay: 2
       until: lab1_postgres_health.status == 200
 
+    # archive_mode is on from the moment Patroni starts PostgreSQL, so every
+    # archive-push fails until this stanza exists. Creating it here, rather than
+    # at the end of the run, keeps that window to a few seconds per node.
+    # It cannot run any earlier: stanza-create reads pg_control, which does not
+    # exist until Patroni has initialised or cloned the data directory.
+    - name: Create the local pgBackRest stanza without connecting to PostgreSQL
+      ansible.builtin.command: pgbackrest --stanza={{ lab1_cluster_name }} --no-online stanza-create
+      become_user: postgres
+      register: lab1_stanza_create
+      changed_when: false
+
 - name: Reconcile and verify the Patroni distributed configuration
   hosts: lab1-pg1
   become: true

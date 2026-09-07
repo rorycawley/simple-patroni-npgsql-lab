@@ -15,9 +15,16 @@ It follows Percona's RPM and HA guidance:
 - configures and verifies `softdog` watchdog fencing;
 - creates a least-privilege `app_runtime` login, `appdb`, and the write-probe
   table;
-- creates a local pgBackRest stanza on each node and enables WAL archiving; and
+- creates each node's local pgBackRest stanza as soon as that node's PostgreSQL
+  reports healthy, because `archive_mode` is on from the moment Patroni starts
+  it and every `archive-push` fails until the stanza exists; and
 - reconciles Patroni's distributed configuration, so later runs do not assume
   that `pg1` is still primary.
+
+`roles/cluster_config/templates/patroni-dcs.yml.j2` is the single source for the
+distributed configuration. `patroni.yml.j2` includes it for the one-time
+`bootstrap.dcs` block, and `playbooks/bootstrap.yml` applies the same file to the
+running cluster with `patronictl edit-config`, so the two paths cannot drift.
 
 The local pgBackRest repositories are a three-VM lab simplification. They prove
 installation, stanza configuration, and WAL archiving, but they are not a

@@ -7,7 +7,12 @@ lab1_etcd_data_dir: /var/lib/etcd/lab1
 lab1_lima_management_cidr: 192.168.5.0/24
 
 # The macOS side of Lima's managed shared network. It is the only non-cluster
-# source allowed to reach PostgreSQL.
+# source allowed to reach PostgreSQL, in both the firewall and pg_hba, so a wrong
+# value locks the client out with a bare connection timeout. Lima puts macOS on
+# <shared subnet>.1, which the playbooks derive from the VM addresses; set this
+# override if your Lima network uses a different gateway address.
+lab1_host_gateway_ip_override: ""
+
 lab1_postgres_client_cidrs:
   - "{{ lab1_host_gateway_ip }}/32"
 

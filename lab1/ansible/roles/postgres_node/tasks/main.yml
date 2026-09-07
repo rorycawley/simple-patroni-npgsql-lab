@@ -1,4 +1,7 @@
 ---
+# Every task below that reaches the network is retried. A single timeout against
+# repo.percona.com or an EPEL mirror would otherwise fail the whole run, which is
+# a poor experience for `make all` on a laptop with imperfect connectivity.
 - name: Install repository prerequisites and firewalld
   ansible.builtin.dnf:
     name:
@@ -8,32 +11,49 @@
       - firewalld
       - python3-firewall
     state: present
+  register: lab1_prereq_packages
+  retries: 3
+  delay: 10
+  until: lab1_prereq_packages is succeeded
 
 - name: Disable Rocky Linux's PostgreSQL module
   ansible.builtin.command: dnf -y module disable postgresql
-  changed_when: false
-
-- name: Enable Rocky Linux CodeReady Builder dependencies
-  ansible.builtin.command: dnf config-manager --set-enabled crb
-  changed_when: false
-
-- name: Enable EPEL packages required by Patroni and pgBackRest
-  ansible.builtin.command: dnf config-manager --set-enabled epel
-  changed_when: false
+  register: lab1_postgresql_module
+  changed_when: "'Nothing to do' not in lab1_postgresql_module.stdout"
 
 - name: Import Percona's RPM packaging key
   ansible.builtin.rpm_key:
     key: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
     state: present
+  register: lab1_percona_key
+  retries: 3
+  delay: 10
+  until: lab1_percona_key is succeeded
 
 - name: Install Percona's repository management package
   ansible.builtin.dnf:
     name: https://repo.percona.com/yum/percona-release-latest.noarch.rpm
     state: present
+  register: lab1_percona_release
+  retries: 3
+  delay: 10
+  until: lab1_percona_release is succeeded
+
+- name: Read the enabled DNF repositories
+  ansible.builtin.command: dnf repolist --enabled
+  register: lab1_enabled_repos
+  changed_when: false
+
+- name: Enable the CodeReady Builder and EPEL repositories
+  ansible.builtin.command: dnf config-manager --set-enabled {{ item }}
+  loop:
+    - crb
+    - epel
+  when: item not in (lab1_enabled_repos.stdout_lines | map('regex_replace', '\\s.*$', '') | list)
 
 - name: Enable the Percona PostgreSQL 18 repository
   ansible.builtin.command: percona-release setup ppg18
-  changed_when: false
+  when: lab1_enabled_repos.stdout is not search('ppg-?18')
 
 - name: Install the Percona PostgreSQL HA node packages
   ansible.builtin.dnf:
@@ -43,10 +63,11 @@
       - percona-pgbackrest
       - etcd
       - python3-python-etcd
-      - python3-pip
-      - python3-devel
-      - binutils
     state: present
+  register: lab1_ha_packages
+  retries: 3
+  delay: 10
+  until: lab1_ha_packages is succeeded
 
 - name: Gather installed service facts
   ansible.builtin.service_facts:
@@ -74,11 +95,14 @@
     state: present
     permanent: true
     immediate: false
+  register: lab1_drop_zone_target
 
 - name: Load the permanent drop-zone configuration
   ansible.builtin.command: firewall-cmd --reload
-  changed_when: false
+  when: lab1_drop_zone_target is changed
 
+# The allow rules must exist before the interfaces move into the drop zone,
+# otherwise this task sequence locks itself out of its own SSH connection.
 - name: Allow Lima's isolated management network to use SSH
   ansible.posix.firewalld:
     zone: drop
@@ -122,7 +146,11 @@
     immediate: true
   loop: "{{ lab1_firewall_interfaces }}"
 
+- name: Read the current firewall default zone
+  ansible.builtin.command: firewall-cmd --get-default-zone
+  register: lab1_current_default_zone
+  changed_when: false
+
 - name: Make the drop zone the system default
   ansible.builtin.command: firewall-cmd --set-default-zone=drop
-  register: lab1_default_zone
-  changed_when: false
+  when: lab1_current_default_zone.stdout | trim != 'drop'

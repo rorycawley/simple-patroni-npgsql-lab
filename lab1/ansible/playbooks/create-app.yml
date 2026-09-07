@@ -43,14 +43,3 @@
             path: /var/lib/pgsql/appdb.sql
             state: absent
           delegate_to: "{{ lab1_primary_inventory_host }}"
-
-- name: Create local pgBackRest stanzas
-  hosts: patroni_nodes
-  become: true
-  become_user: postgres
-  gather_facts: false
-  tasks:
-    - name: Create the local pgBackRest stanza without connecting to PostgreSQL
-      ansible.builtin.command: pgbackrest --stanza={{ lab1_cluster_name }} --no-online stanza-create
-      register: lab1_stanza_create
-      changed_when: false

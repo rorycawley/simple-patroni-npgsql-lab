@@ -9,41 +9,6 @@ restapi:
 etcd3:
   hosts: {% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab1_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}
 
-bootstrap:
-  dcs:
-    ttl: 30
-    loop_wait: 10
-    retry_timeout: 10
-    primary_start_timeout: 0
-    maximum_lag_on_failover: 1048576
-    check_timeline: true
-    postgresql:
-      use_pg_rewind: true
-      use_slots: true
-      parameters:
-        wal_level: replica
-        hot_standby: "on"
-        max_wal_senders: 10
-        max_replication_slots: 10
-        wal_log_hints: "on"
-        password_encryption: scram-sha-256
-        ssl: "off"
-        archive_mode: "on"
-        archive_timeout: 60s
-        archive_command: pgbackrest --stanza={{ lab1_cluster_name }} archive-push %p
-      pg_hba:
-        - local all all peer
-        - host all all 127.0.0.1/32 scram-sha-256
-        - host replication replicator 127.0.0.1/32 scram-sha-256
-{% for host in groups['patroni_nodes'] %}
-        - host replication replicator {{ hostvars[host].lab1_node_ip }}/32 scram-sha-256
-        - host postgres postgres {{ hostvars[host].lab1_node_ip }}/32 scram-sha-256
-{% endfor %}
-        - host appdb app_runtime {{ lab1_host_gateway_ip }}/32 scram-sha-256
-  initdb:
-    - encoding: UTF8
-    - data-checksums
-
 postgresql:
   cluster_name: {{ lab1_cluster_name }}
   listen: 0.0.0.0:5432
@@ -75,3 +40,15 @@ tags:
   noloadbalance: false
   clonefrom: false
   nosync: false
+
+# Keep this block last. Jinja drops the included file's trailing newline, so any
+# key rendered after the include would be appended to its final line instead of
+# starting its own. At end of file there is nothing to corrupt.
+bootstrap:
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  dcs:
+{% filter indent(4, true) %}
+{% include 'patroni-dcs.yml.j2' %}
+{% endfilter %}

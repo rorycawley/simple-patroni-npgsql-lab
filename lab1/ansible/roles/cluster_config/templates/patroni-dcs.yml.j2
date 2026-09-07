@@ -1,3 +1,10 @@
+# Patroni's distributed configuration. patroni.yml.j2 includes this file for the
+# one-time bootstrap.dcs block, and playbooks/bootstrap.yml applies it to the
+# running cluster with `patronictl edit-config`, so both paths stay identical.
+#
+# Patroni requires ttl >= loop_wait + 2 * retry_timeout. These values sit exactly
+# on that floor (30 = 10 + 2 * 10), so raising loop_wait or retry_timeout without
+# also raising ttl makes Patroni reject the configuration.
 ttl: 30
 loop_wait: 10
 retry_timeout: 10

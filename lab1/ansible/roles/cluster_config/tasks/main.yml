@@ -27,7 +27,6 @@
     - { path: "{{ lab1_postgres_data_dir }}", owner: postgres, group: postgres, mode: "0700" }
     - { path: /var/lib/pgbackrest, owner: postgres, group: postgres, mode: "0750" }
     - { path: /var/log/pgbackrest, owner: postgres, group: postgres, mode: "0750" }
-    - { path: /var/spool/pgbackrest, owner: postgres, group: postgres, mode: "0750" }
 
 - name: Configure etcd
   ansible.builtin.template:

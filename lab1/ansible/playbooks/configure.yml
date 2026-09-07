@@ -10,7 +10,7 @@
     - name: Record the three node IP addresses
       ansible.builtin.set_fact:
         lab1_peer_ips: "{{ groups['patroni_nodes'] | map('extract', hostvars, 'lab1_node_ip') | list }}"
-        lab1_host_gateway_ip: "{{ lab1_node_ip | regex_replace('\\.[0-9]+$', '.1') }}"
+        lab1_host_gateway_ip: "{{ lab1_host_gateway_ip_override or (lab1_node_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
 
   roles:
     - role: cluster_config

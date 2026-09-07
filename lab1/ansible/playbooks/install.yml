@@ -17,9 +17,18 @@
       ansible.builtin.set_fact:
         lab1_peer_ips: "{{ groups['patroni_nodes'] | map('extract', hostvars, 'lab1_node_ip') | list }}"
 
+    - name: Assert the three nodes share one Lima shared subnet
+      ansible.builtin.assert:
+        that:
+          - "(lab1_peer_ips | map('regex_replace', '\\.[0-9]+$', '') | unique | list | length) == 1"
+        fail_msg: >-
+          The VMs are not on one /24 shared subnet ({{ lab1_peer_ips | join(', ') }}),
+          so the macOS gateway address cannot be derived from them. Set
+          lab1_host_gateway_ip_override in inventory/group_vars/all.yml.
+
     - name: Record the macOS address on the Lima shared subnet
       ansible.builtin.set_fact:
-        lab1_host_gateway_ip: "{{ lab1_node_ip | regex_replace('\\.[0-9]+$', '.1') }}"
+        lab1_host_gateway_ip: "{{ lab1_host_gateway_ip_override or (lab1_node_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
 
   roles:
     - role: postgres_node

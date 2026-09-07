@@ -49,8 +49,21 @@ instance_exists() {
 }
 
 vm_ip() {
-  limactl shell --tty=false "$1" sh -ceu \
-    'ip -4 -o addr show dev lima0 | grep -oE "[0-9.]+/[0-9]+" | cut -d/ -f1'
+  local vm_name="$1" address=""
+
+  # limactl start returns before the shared network has necessarily leased an
+  # address, and an empty value here only fails much later in the inventory.
+  for _ in {1..30}; do
+    address="$(limactl shell --tty=false "$vm_name" sh -ceu \
+      'ip -4 -o addr show dev lima0 | grep -oE "[0-9.]+/[0-9]+" | cut -d/ -f1' 2>/dev/null || true)"
+    if [[ -n "$address" ]]; then
+      printf '%s\n' "$address"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Timed out waiting for a lima0 shared-network address on $vm_name" >&2
+  return 1
 }
 
 write_env_file() {
@@ -118,7 +131,9 @@ remove_hostnames() {
   fi
   hosts_without_block="$(mktemp "${TMPDIR:-/tmp}/lab1-hosts.XXXXXX")"
   rewrite_hosts_without_lab_block "$hosts_without_block"
-  if ! sudo -n cp "$hosts_without_block" "$HOSTS_FILE"; then
+  local -a sudo_options=(-n)
+  [[ "${LAB1_INTERACTIVE_SUDO:-0}" == 1 ]] && sudo_options=()
+  if ! sudo "${sudo_options[@]}" cp "$hosts_without_block" "$HOSTS_FILE"; then
     echo "Could not remove the Lab 1 host aliases without interactive sudo." >&2
     rm -f "$hosts_without_block"
     return
@@ -169,7 +184,7 @@ main() {
   require_lima
   case "${1:-}" in
     create) require_network; create ;;
-    destroy) destroy ;;
+    destroy) LAB1_INTERACTIVE_SUDO=1 destroy ;;
     status) status ;;
     hostnames) require_network; LAB1_INTERACTIVE_SUDO=1 configure_hostnames ;;
     *) usage; exit 2 ;;
