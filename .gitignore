@@ -30,3 +30,8 @@ coverage/
 
 # Logs
 *.log
+
+# Cross-published client payload for the application VM. No leading path:
+# a pattern containing a slash is anchored to this file's directory, so
+# "client/publish/" would not match lab2/client/publish/.
+publish/

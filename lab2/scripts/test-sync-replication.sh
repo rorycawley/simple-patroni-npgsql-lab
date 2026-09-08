@@ -107,6 +107,11 @@ test_topology() {
   echo "=== Quorum commit: configuration is actually in effect ==="
   local primary names states count
 
+  # Patroni adds standbys to the quorum set as they catch up, so immediately
+  # after bootstrap the set can legitimately hold one node. Asserting then
+  # measures convergence rather than configuration.
+  wait_for_quorum || { fail "the quorum set did not reach both standbys"; return 1; }
+
   primary="$(leader_vm)"
   echo "  primary is $primary"
 

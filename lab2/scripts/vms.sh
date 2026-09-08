@@ -4,6 +4,14 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly VM_NAMES=(lab2-pg1 lab2-pg2 lab2-pg3)
 readonly VM_HOSTNAMES=(pg1.lab2.example pg2.lab2.example pg3.lab2.example)
+# The application runs on its own VM rather than on macOS, so the client is
+# exercised across the network like a real one -- and so PostgreSQL can pin a
+# TLS 1.3 floor, which .NET on macOS cannot negotiate at all.
+readonly APP_VM=lab2-app1
+readonly APP_HOSTNAME=app1.lab2.example
+readonly APP_CPUS="${APP_CPUS:-2}"
+readonly APP_MEMORY_GIB="${APP_MEMORY_GIB:-2}"
+readonly APP_DISK_GIB="${APP_DISK_GIB:-15}"
 readonly VM_CPUS="${VM_CPUS:-2}"
 readonly VM_MEMORY_GIB="${VM_MEMORY_GIB:-4}"
 readonly VM_DISK_GIB="${VM_DISK_GIB:-20}"
@@ -92,6 +100,7 @@ vm_ip() {
 }
 
 write_env_file() {
+  local app_ip="$1"; shift
   local -a vm_ips=("$@")
 
   {
@@ -103,6 +112,8 @@ write_env_file() {
     done
     printf 'PGHOSTS=%s:5432,%s:5432,%s:5432\n' \
       "${VM_HOSTNAMES[0]}" "${VM_HOSTNAMES[1]}" "${VM_HOSTNAMES[2]}"
+    printf 'APP1_HOST=%s\n' "$APP_HOSTNAME"
+    printf 'APP1_IP=%s\n' "$app_ip"
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   echo "Wrote connection details: $ENV_FILE"
@@ -124,7 +135,7 @@ configure_hostnames() {
   for vm_name in "${VM_NAMES[@]}"; do
     vm_ips+=("$(vm_ip "$vm_name")")
   done
-  write_env_file "${vm_ips[@]}"
+  write_env_file "$(vm_ip "$APP_VM")" "${vm_ips[@]}"
 
   hosts_without_block="$(mktemp "${TMPDIR:-/tmp}/lab2-hosts.XXXXXX")"
   updated_hosts="$(mktemp "${TMPDIR:-/tmp}/lab2-hosts-updated.XXXXXX")"
@@ -135,6 +146,7 @@ configure_hostnames() {
     for index in "${!VM_NAMES[@]}"; do
       printf '%s %s\n' "${vm_ips[index]}" "${VM_HOSTNAMES[index]}"
     done
+    printf '%s %s\n' "$(vm_ip "$APP_VM")" "$APP_HOSTNAME"
     printf '%s\n' "$HOSTS_END"
   } > "$updated_hosts"
   local -a sudo_options=(-n)
@@ -183,11 +195,26 @@ create() {
     fi
     limactl start --tty=false "$vm_name"
   done
+
+  if instance_exists "$APP_VM"; then
+    echo "Starting existing VM: $APP_VM"
+  else
+    echo "Creating VM: $APP_VM (application host, no data disks)"
+    limactl create --tty=false --name="$APP_VM" \
+      --cpus="$APP_CPUS" --memory="$APP_MEMORY_GIB" --disk="$APP_DISK_GIB" \
+      --mount-none --network="$LIMA_NETWORK" "$LIMA_TEMPLATE"
+  fi
+  limactl start --tty=false "$APP_VM"
+
   configure_hostnames
 }
 
 destroy() {
   remove_hostnames
+  if instance_exists "$APP_VM"; then
+    echo "Deleting VM: $APP_VM"
+    limactl delete --tty=false --force "$APP_VM"
+  fi
   for vm_name in "${VM_NAMES[@]}"; do
     if instance_exists "$vm_name"; then
       echo "Deleting VM and disk: $vm_name"

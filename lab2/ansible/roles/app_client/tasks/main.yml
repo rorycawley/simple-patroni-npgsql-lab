@@ -1,0 +1,67 @@
+---
+# Provisions the application host: the published .NET client, the CA it verifies
+# the cluster against, and the password file for app_runtime.
+#
+# The binary is cross-published from the control machine as a self-contained
+# linux-arm64 executable, so the guest needs no SDK and no runtime. Running the
+# client here rather than on macOS is what allows PostgreSQL to pin a TLS 1.3
+# floor: .NET on macOS uses Apple's TLS stack, which does not implement 1.3.
+
+# .NET requires ICU for globalization and the Rocky cloud image does not ship
+# it; without this the client aborts before Main with "Couldn't find a valid ICU
+# package". Self-contained publishing removes the need for a runtime, not for
+# system libraries.
+- name: Install the ICU library the .NET runtime needs
+  ansible.builtin.dnf:
+    name: libicu
+    state: present
+  register: lab2_libicu
+  retries: 5
+  delay: 15
+  until: lab2_libicu is succeeded
+
+- name: Create the client directory
+  ansible.builtin.file:
+    path: "{{ lab2_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# A single self-contained file, copied over the normal connection. synchronize
+# is not usable here: it builds its own ssh command and ignores
+# ansible_ssh_common_args, so it cannot use Lima's generated SSH config.
+- name: Install the published client
+  ansible.builtin.copy:
+    src: "{{ lab2_app_publish_dir }}/Lab2.Client"
+    dest: "{{ lab2_app_dir }}/Lab2.Client"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the client's credential directory
+  ansible.builtin.file:
+    path: "{{ lab2_app_secrets_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# The CA only: the client verifies the cluster, and is authenticated by SCRAM
+# inside the tunnel rather than by a certificate of its own.
+- name: Install the CA certificate the client verifies against
+  ansible.builtin.copy:
+    src: "{{ lab2_pki_source }}/ca.crt"
+    dest: "{{ lab2_app_secrets_dir }}/ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the app_runtime password file
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../.secrets/pgpass"
+    dest: "{{ lab2_app_secrets_dir }}/pgpass"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true

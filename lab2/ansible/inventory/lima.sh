@@ -7,6 +7,8 @@ readonly ENV_FILE="$LAB_DIR/.env"
 readonly VM_NAMES=(lab2-pg1 lab2-pg2 lab2-pg3)
 readonly NODE_NAMES=(pg1 pg2 pg3)
 readonly NODE_FQDNS=(pg1.lab2.example pg2.lab2.example pg3.lab2.example)
+readonly APP_VM=lab2-app1
+readonly APP_FQDN=app1.lab2.example
 
 usage() {
   echo "Usage: lima.sh --list" >&2
@@ -42,12 +44,24 @@ inventory() {
       "$vm_name" "$vm_name" "$ssh_config_file" "$node_ip" \
       "${NODE_NAMES[index]}" "${NODE_FQDNS[index]}"
   done
+  # The application host: its own group, so playbooks targeting patroni_nodes
+  # never touch it and it never appears in the cluster's peer lists.
+  ssh_config_file="$(limactl list --format '{{.SSHConfigFile}}' "$APP_VM")"
+  [[ -n "$ssh_config_file" && -n "${APP1_IP:-}" ]] || {
+    echo "Missing Lima SSH configuration or VM IP for $APP_VM" >&2
+    exit 1
+  }
+  printf ',"%s":{"ansible_host":"lima-%s","ansible_ssh_common_args":"-F %s","lab2_node_ip":"%s","lab2_node_name":"app1","lab2_node_fqdn":"%s"}' \
+    "$APP_VM" "$APP_VM" "$ssh_config_file" "$APP1_IP" "$APP_FQDN"
+
   printf '%s' '}},"patroni_nodes":{"hosts":['
   for index in "${!VM_NAMES[@]}"; do
     [[ "$index" -gt 0 ]] && printf ','
     printf '"%s"' "${VM_NAMES[index]}"
   done
-  printf '%s\n' ']}}'
+  printf '%s' ']},"app_nodes":{"hosts":["'
+  printf '%s' "$APP_VM"
+  printf '%s\n' '"]}}'
 }
 
 case "${1:-}" in

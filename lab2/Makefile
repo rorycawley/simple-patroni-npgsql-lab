@@ -77,6 +77,10 @@ configure_cluster:
 	ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-galaxy collection install -r ./ansible/requirements.yml
 	./scripts/generate-secrets.sh
 	./scripts/generate-pki.sh
+	# Self-contained linux-arm64 build, so the application VM needs no SDK.
+	dotnet publish ./client/Lab2.Client.csproj -c Release -r linux-arm64 \
+	  --self-contained true -p:PublishSingleFile=true \
+	  -o ./client/publish/linux-arm64 --nologo
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/site.yml
 
 verify_cluster:

@@ -42,9 +42,6 @@ done
 [[ -f "$LAB_DIR/.secrets/pgpass" ]] || { echo "Run make configure_cluster first" >&2; exit 1; }
 
 source "$LAB_DIR/.env"
-export LAB2_PG_HOSTS="${PG1_IP},${PG2_IP},${PG3_IP}"
-export LAB2_PGPASS="$LAB_DIR/.secrets/pgpass"
-export LAB2_CA="$LAB_DIR/.secrets/pki/ca.crt"
 
 client_stdout=""
 client_stderr=""
@@ -60,8 +57,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Runs on the application VM. Extra environment for a probe is passed through
+# as NAME=VALUE arguments before the mode.
 run_client() {
-  dotnet run --project "$LAB_DIR/client/Lab2.Client.csproj" --configuration Release -- "$@"
+  # Seeded rather than started empty: bash 3.2, which macOS ships, treats
+  # "${arr[@]}" on an empty array as an unbound variable under set -u.
+  local -a env_pairs=(
+    "LAB2_PG_HOSTS=${PG1_IP},${PG2_IP},${PG3_IP}"
+    "LAB2_PGPASS=/etc/lab2/client/pgpass"
+    "LAB2_CA=/etc/lab2/client/ca.crt"
+  )
+  while [[ "${1:-}" == *=* ]]; do env_pairs+=("$1"); shift; done
+  limactl shell --tty=false lab2-app1 sudo env "${env_pairs[@]}" \
+    /opt/lab2-client/Lab2.Client "$@"
 }
 
 patroni_json() {
@@ -155,8 +163,7 @@ test_uncertain_write() {
   client_stdout="$(mktemp "${TMPDIR:-/tmp}/lab2-uncertain-out.XXXXXX")"
   client_stderr="$(mktemp "${TMPDIR:-/tmp}/lab2-uncertain-err.XXXXXX")"
 
-  LAB2_PROBE_ID="$probe_id" LAB2_APP_NAME="$app_name" \
-    run_client uncertain-write > "$client_stdout" 2> "$client_stderr" &
+  run_client "LAB2_PROBE_ID=$probe_id" "LAB2_APP_NAME=$app_name" uncertain-write > "$client_stdout" 2> "$client_stderr" &
   client_pid=$!
 
   # Wait until a third-party session can see the row. That proves the COMMIT is
