@@ -31,8 +31,8 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/vms.sh create|destroy|status|hostnames
 
-create   Create (if needed) and start lab2-pg1, lab2-pg2, and lab2-pg3.
-destroy  Permanently delete those three VMs and their disks.
+create   Create (if needed) and start lab2-pg1, lab2-pg2, lab2-pg3, and lab2-app1.
+destroy  Permanently delete those four VMs and their disks.
 status   Display the Lima status of the Lab 2 VMs.
 hostnames  Update the marked Lab 2 block in macOS /etc/hosts.
 

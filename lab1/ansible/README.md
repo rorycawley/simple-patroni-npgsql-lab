@@ -3,6 +3,9 @@
 This automation turns the three Rocky Linux 9.8 Lima VMs into a working
 Patroni-managed Percona PostgreSQL 18 cluster.
 
+What Lab 1 claims and how it proves it is in the [Lab 1 guide](../README.md).
+This file covers how the configuration is applied.
+
 It follows Percona's RPM and HA guidance:
 
 - enables EPEL and CRB, disables Rocky's PostgreSQL module, configures the
@@ -34,7 +37,8 @@ installation, stanza configuration, and WAL archiving, but they are not a
 durable shared backup design. A production design needs storage independent of
 the database VM.
 
-No TLS, mTLS, or other encryption-in-transit configuration is included in Lab 1.
+No TLS, mTLS, or other encryption-in-transit configuration is included in Lab 1,
+and the data volumes are not encrypted. [Lab 2](../../lab2/README.md) adds both.
 
 ## Network policy
 

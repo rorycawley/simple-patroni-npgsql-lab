@@ -4,12 +4,16 @@
 > scratch. Where the result differs from the original plan the reason is stated
 > below rather than the plan quietly rewritten.
 
+The shared components, cluster design, failover semantics and prerequisites are
+in the [top-level README](../README.md). This file covers Lab 2 only: what it
+adds over [Lab 1](../lab1/README.md), and how that is proven.
+
 ## Goal
 
-[Lab 1](../lab1/README.md) proves a three-node Patroni cluster survives node
-loss, process death and split brain without losing an acknowledged transaction.
-It does so on an unencrypted disk and an unencrypted network, and says so: *"Run
-it only on an isolated, trusted lab network."*
+Lab 1 proves a three-node Patroni cluster survives node loss, process death and
+split brain without losing an acknowledged transaction. It does so on an
+unencrypted disk and an unencrypted network, and says so: *"Run it only on an
+isolated, trusted lab network."*
 
 Lab 2 keeps every Lab 1 guarantee and removes both assumptions for the database
 and its cluster state: unreadable to anyone holding those volumes, and unreadable
@@ -25,6 +29,10 @@ to anyone on the wire between components.
 | TLS on every channel below, mutual where the peer is a machine | Client authentication by certificate for the application (SCRAM inside TLS) |
 | The application on its own VM, so it crosses the network like a real client | Hardening the application as a service; it is invoked per test, not long-running |
 | — | Backups. pgBackRest is carried over from Lab 1 unchanged, and its local repository is left as it is; encrypting it, moving it to a dedicated host and rehearsing restore are all Lab 3 |
+
+Everything Lab 1 asserts about failover, fencing, quorum commit and the client's
+configured limits is inherited unchanged and re-run here. It is documented in the
+[Lab 1 guide](../lab1/README.md) rather than repeated.
 
 ## Data at rest
 
@@ -80,6 +88,20 @@ rather than implying uniformity:
 | PostgreSQL | TLS 1.3 | `ssl_min_protocol_version`, reachable only because the client is on Linux |
 | Patroni REST API | none | Patroni exposes `cafile`, `certfile`, `keyfile`, `ciphers` and `verify_client`, and no minimum-version setting |
 
+## The client
+
+Identical to Lab 1's, including its retry budget and its refusal to reissue an
+uncertain write, with two settings changed:
+
+| Setting | Lab 1 | Lab 2 |
+| --- | --- | --- |
+| `SSL Mode` | `Disable` | `VerifyFull` |
+| `Root Certificate` | — | the lab CA, installed at `/etc/lab2/client/ca.crt` |
+
+`VerifyFull` rather than `Require` is the whole point. `Require` encrypts but
+accepts any certificate, so it stops eavesdropping and not impersonation.
+`VerifyFull` checks the chain against the lab CA *and* that the name matches.
+
 ## Acceptance criteria
 
 | ID | Property | Command | Pass condition |
@@ -88,6 +110,10 @@ rather than implying uniformity:
 | AC-2 | Data in transit is encrypted | `make test_in_transit` | Every channel above negotiates TLS, and a plaintext attempt against each is refused |
 | AC-3 | Peer identity is verified | `make test_identity` | The client fails closed against a wrong CA and against a mismatched address, and recovers when the correct CA is restored; mutual-TLS channels reject a client presenting no certificate |
 | AC-4 | Encryption does not weaken availability | `make check` | Every Lab 1 check still passes, and a node that reboots unlocks its volumes and rejoins unattended |
+
+`make test_pki` supports AC-2 and AC-3 by asserting the certificates themselves —
+that each carries the right subject, EKU and SANs — before any of them is used on
+a live connection.
 
 AC-4 is the one that matters most. Encryption that survives a healthy cluster but
 breaks recovery is worse than none: a node whose volume does not unlock after a
@@ -98,16 +124,19 @@ mounted will initialise an empty data directory over the mountpoint.
 
 Four VMs. Three cluster nodes as in Lab 1, plus a host for the application.
 
-| VM | Role | Additional disks |
-| --- | --- | --- |
-| `lab2-pg1/2/3` | PostgreSQL, Patroni, etcd | `pgdata` 10G, `etcd` 5G — each LUKS2 |
-| `lab2-app1` | The .NET client | none |
+| VM | Hostname | Role | Additional disks |
+| --- | --- | --- | --- |
+| `lab2-pg1/2/3` | `pg1/2/3.lab2.example` | PostgreSQL, Patroni, etcd | `pgdata` 10G, `etcd` 5G — each LUKS2 |
+| `lab2-app1` | `app1.lab2.example` | The .NET client | none |
 
 The client runs in a VM rather than on the host for two reasons. It crosses the
 same network, firewall and `pg_hba` rules as any real client, so the failover
 tests prove something closer to production. And .NET on macOS uses Apple's TLS
 stack, which does not implement TLS 1.3 at all — while the client lived on the
 host, PostgreSQL could not be pinned above TLS 1.2.
+
+The macOS gateway address stays permitted on 5432 for `psql` debugging, since
+OpenSSL negotiates TLS 1.3 where .NET on macOS cannot.
 
 Lima disks are independent objects that outlive their instance, so teardown
 deletes the VMs first and then the disks.
@@ -125,7 +154,7 @@ From an empty machine:
 ==============================================================================
  Lab 2 results
 ==============================================================================
- PASS  Create the three Lima VMs                                         3m18s
+ PASS  Create the four Lima VMs                                          3m18s
  PASS  Install and configure the Patroni cluster                         1m59s
  PASS  Cluster services, quorum, replication, pgBackRest                    4s
  PASS  Encryption at rest: LUKS2 volumes, and a missing one stops the service      45s
@@ -146,6 +175,24 @@ From an empty machine:
 
 The four encryption checks sit above the Lab 1 ones deliberately: if the cluster
 is not encrypted there is little point asking whether it fails over correctly.
-Individual checks run on their own — `make test_at_rest`, `test_in_transit`,
-`test_identity`, `test_pki` — and `make check` runs everything without
-rebuilding.
+
+### Individual phases
+
+```sh
+make create_vms         # create missing VMs and their LUKS disks, start existing ones
+make configure_cluster  # PKI, encrypted volumes, cluster, app host
+make verify_cluster     # every service, plus an Npgsql read-write probe
+make test_at_rest       # AC-1
+make test_in_transit    # AC-2
+make test_identity      # AC-3
+make test_pki           # the certificates themselves
+make check              # AC-4: everything above plus every Lab 1 check
+```
+
+The Lab 1 checks — `test_connection`, `test_client`, `test_sync`,
+`test_failover`, `test_fencing` — exist here under the same names and assert the
+same things; see the [Lab 1 guide](../lab1/README.md#acceptance-criteria).
+
+The [Ansible guide](ansible/README.md) covers what the configuration applies and
+the network policy it installs. [`PLAN.md`](PLAN.md) records how this lab was
+built, the risks it had to mitigate, and what was carried into Lab 3.

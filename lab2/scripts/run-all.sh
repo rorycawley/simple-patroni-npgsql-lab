@@ -113,7 +113,7 @@ main() {
 
   case "$mode" in
     all)
-      run_phase "Create the three Lima VMs" create_vms required
+      run_phase "Create the four Lima VMs" create_vms required
       run_phase "Install and configure the Patroni cluster" configure_cluster required
       ;;
     check) ;;
