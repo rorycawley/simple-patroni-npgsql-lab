@@ -1,4 +1,4 @@
-.PHONY: help all check clean test_at_rest test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
+.PHONY: help all check clean test_at_rest test_pki test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
 
 # `make` on its own prints this help rather than building a cluster, because
 # `all` creates VMs and runs destructive fault injection.
@@ -28,6 +28,7 @@ help:
 	@printf '%s\n' ''
 	@printf '%s\n' 'Encryption:'
 	@printf '%s\n' '  test_at_rest       Both data volumes are LUKS2 and a missing volume stops the service'
+	@printf '%s\n' '  test_pki           Certificates assert the right identities; CA key stays off the guests'
 	@printf '%s\n' ''
 	@printf '%s\n' 'Client guarantees:'
 	@printf '%s\n' '  test_client        Pool limit, command timeout, and no blind retry'
@@ -75,6 +76,7 @@ configure_hostnames:
 configure_cluster:
 	ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-galaxy collection install -r ./ansible/requirements.yml
 	./scripts/generate-secrets.sh
+	./scripts/generate-pki.sh
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/site.yml
 
 verify_cluster:
@@ -86,6 +88,9 @@ test_connection:
 
 test_client:
 	./scripts/test-client.sh all
+
+test_pki:
+	./scripts/test-pki.sh
 
 test_at_rest:
 	./scripts/test-at-rest.sh all

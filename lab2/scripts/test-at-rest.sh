@@ -5,10 +5,12 @@ set -uo pipefail
 #
 #   layout  Both data directories are distinct LUKS2 devices, neither on the
 #           root filesystem, each listed in crypttab so it unlocks at boot.
-#   guard   Patroni never runs without its data volume. Without this the
-#           encryption is decorative: PostgreSQL would initialise an empty data
-#           directory over the mountpoint and report a healthy node holding none
-#           of the data, and every other check in the suite would still pass.
+#   guard   Patroni never runs while its data directory is anything other than
+#           the encrypted volume. Systemd may repair a broken mount before
+#           starting the service, which is a fine outcome; what must never
+#           happen is PostgreSQL initialising an empty data directory over the
+#           mountpoint and reporting a healthy node holding none of the data,
+#           because every other check in the suite would still pass.
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -153,18 +155,26 @@ try_start() {
   systemctl is-active percona-patroni 2>/dev/null || true
 }
 
+# Two acceptable outcomes, one forbidden one. Systemd may pull in the mount unit
+# and repair the volume before starting -- that is correct, not a failure. What
+# is forbidden is Patroni running with its data directory on anything else.
 check_case() {
   label="$1"
   state=$(try_start)
+  src=$(findmnt -no SOURCE /var/lib/pgsql 2>/dev/null || echo none)
   if [ "$state" = "active" ]; then
-    echo "FAIL $label: Patroni reached active without its data volume"; fail=1
+    if [ "$src" = "/dev/mapper/lab2-pgdata" ]; then
+      echo "ok $label: systemd restored the volume first; Patroni ran on the encrypted device"
+    else
+      echo "FAIL $label: Patroni is active with /var/lib/pgsql on '$src'"; fail=1
+    fi
   else
     echo "ok $label: Patroni never became active (state: $state)"
-  fi
-  if [ "$(ls -A /var/lib/pgsql | wc -l)" -eq 0 ]; then
-    echo "ok $label: nothing written to the root filesystem under the mountpoint"
-  else
-    echo "FAIL $label: data was written under the mountpoint"; fail=1
+    if [ "$src" = "none" ] && [ "$(ls -A /var/lib/pgsql | wc -l)" -ne 0 ]; then
+      echo "FAIL $label: data was written under the unmounted mountpoint"; fail=1
+    else
+      echo "ok $label: nothing was written to the root filesystem"
+    fi
   fi
   systemctl stop percona-patroni 2>/dev/null
 }
