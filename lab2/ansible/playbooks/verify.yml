@@ -18,6 +18,19 @@
           - ansible_facts.services['postgresql-18.service'].status == 'disabled'
         fail_msg: One or more required services have an unexpected state.
 
+    # Enforcing is the image default, which means nothing checks it. A node
+    # left permissive would pass every other check in this suite.
+    - name: Read the SELinux mode
+      ansible.builtin.command: getenforce
+      register: lab2_selinux_mode
+      changed_when: false
+
+    - name: Assert SELinux is enforcing
+      ansible.builtin.assert:
+        that:
+          - lab2_selinux_mode.stdout | trim == 'Enforcing'
+        fail_msg: "SELinux is '{{ lab2_selinux_mode.stdout | trim }}', expected Enforcing."
+
     - name: Read the active firewall default zone
       ansible.builtin.command: firewall-cmd --get-default-zone
       register: lab2_firewall_default_zone
