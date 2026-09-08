@@ -1,0 +1,7 @@
+---
+- import_playbook: install.yml
+- import_playbook: configure.yml
+- import_playbook: start-etcd.yml
+- import_playbook: bootstrap.yml
+- import_playbook: create-app.yml
+- import_playbook: flush-disks.yml

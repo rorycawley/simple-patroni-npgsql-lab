@@ -1,0 +1,10 @@
+[global]
+repo1-path=/var/lib/pgbackrest
+repo1-retention-full=2
+process-max=2
+start-fast=y
+log-level-console=info
+log-level-file=detail
+
+[{{ lab2_cluster_name }}]
+pg1-path={{ lab2_postgres_data_dir }}

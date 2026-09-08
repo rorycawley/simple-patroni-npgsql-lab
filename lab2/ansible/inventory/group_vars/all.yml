@@ -1,0 +1,27 @@
+---
+lab2_cluster_name: lab2
+lab2_patroni_namespace: /service/
+lab2_postgres_data_dir: /var/lib/pgsql/data
+lab2_postgres_bin_dir: /usr/pgsql-18/bin
+lab2_etcd_data_dir: /var/lib/etcd/lab2
+lab2_lima_management_cidr: 192.168.5.0/24
+
+# The macOS side of Lima's managed shared network. It is the only non-cluster
+# source allowed to reach PostgreSQL, in both the firewall and pg_hba, so a wrong
+# value locks the client out with a bare connection timeout. Lima puts macOS on
+# <shared subnet>.1, which the playbooks derive from the VM addresses; set this
+# override if your Lima network uses a different gateway address.
+lab2_host_gateway_ip_override: ""
+
+lab2_postgres_client_cidrs:
+  - "{{ lab2_host_gateway_ip }}/32"
+
+lab2_firewall_interfaces:
+  - eth0
+  - lima0
+
+lab2_cluster_ports:
+  - 2379 # etcd client
+  - 2380 # etcd peer
+  - 5432 # PostgreSQL and streaming replication
+  - 8008 # Patroni REST API

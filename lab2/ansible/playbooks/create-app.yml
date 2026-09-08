@@ -1,0 +1,45 @@
+---
+- name: Create the Lab 2 application database and login
+  hosts: lab2-pg1
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../../.secrets/cluster.yml"
+  tasks:
+    - name: Read the current Patroni topology
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml list --format=json
+      become_user: postgres
+      register: lab2_app_patroni_topology
+      changed_when: false
+
+    - name: Identify the current primary inventory host
+      ansible.builtin.set_fact:
+        lab2_primary_inventory_host: >-
+          lab2-{{ (lab2_app_patroni_topology.stdout | from_json
+          | selectattr('Role', 'equalto', 'Leader') | map(attribute='Member') | first) }}
+
+    - name: Provision the application database without retaining SQL secrets
+      block:
+        - name: Write the temporary application bootstrap SQL
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../templates/appdb.sql.j2"
+            dest: /var/lib/pgsql/appdb.sql
+            owner: postgres
+            group: postgres
+            mode: "0600"
+          no_log: true
+          delegate_to: "{{ lab2_primary_inventory_host }}"
+
+        - name: Apply the application database bootstrap
+          ansible.builtin.command: /usr/pgsql-18/bin/psql --no-psqlrc --set=ON_ERROR_STOP=1 --file=/var/lib/pgsql/appdb.sql
+          become_user: postgres
+          register: lab2_app_bootstrap
+          changed_when: true
+          no_log: true
+          delegate_to: "{{ lab2_primary_inventory_host }}"
+      always:
+        - name: Remove the temporary application bootstrap SQL
+          ansible.builtin.file:
+            path: /var/lib/pgsql/appdb.sql
+            state: absent
+          delegate_to: "{{ lab2_primary_inventory_host }}"

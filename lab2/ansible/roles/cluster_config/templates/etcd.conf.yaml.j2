@@ -1,0 +1,13 @@
+name: "{{ lab2_node_name }}"
+initial-cluster-token: "lab2-postgresql-ha"
+# etcd ignores every initial-cluster-* setting once its data directory holds a
+# member, so rerunning configure_cluster does not re-bootstrap a live cluster.
+# Wiping {{ lab2_etcd_data_dir }} would, which discards all Patroni state.
+initial-cluster-state: "new"
+initial-cluster: "{% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab2_node_name }}=http://{{ hostvars[host].lab2_node_ip }}:2380{% if not loop.last %},{% endif %}{% endfor %}"
+data-dir: "{{ lab2_etcd_data_dir }}"
+initial-advertise-peer-urls: "http://{{ lab2_node_ip }}:2380"
+listen-peer-urls: "http://{{ lab2_node_ip }}:2380"
+advertise-client-urls: "http://{{ lab2_node_ip }}:2379"
+listen-client-urls: "http://127.0.0.1:2379,http://{{ lab2_node_ip }}:2379"
+enable-v2: false

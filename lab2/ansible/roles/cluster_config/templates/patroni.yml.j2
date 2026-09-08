@@ -1,0 +1,54 @@
+namespace: {{ lab2_patroni_namespace }}
+scope: {{ lab2_cluster_name }}
+name: {{ lab2_node_name }}
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: {{ lab2_node_ip }}:8008
+
+etcd3:
+  hosts: {% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab2_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}
+
+postgresql:
+  cluster_name: {{ lab2_cluster_name }}
+  listen: 0.0.0.0:5432
+  connect_address: {{ lab2_node_ip }}:5432
+  data_dir: {{ lab2_postgres_data_dir }}
+  bin_dir: {{ lab2_postgres_bin_dir }}
+  pgpass: /var/lib/pgsql/.pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: {{ postgres_replication_password | to_json }}
+    superuser:
+      username: postgres
+      password: {{ postgres_superuser_password | to_json }}
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+  create_replica_methods:
+    - basebackup
+  basebackup:
+    checkpoint: fast
+
+watchdog:
+  mode: required
+  device: /dev/watchdog
+  safety_margin: 5
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
+
+# Keep this block last. Jinja drops the included file's trailing newline, so any
+# key rendered after the include would be appended to its final line instead of
+# starting its own. At end of file there is nothing to corrupt.
+bootstrap:
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  dcs:
+{% filter indent(4, true) %}
+{% include 'patroni-dcs.yml.j2' %}
+{% endfilter %}

@@ -1,0 +1,116 @@
+---
+- name: Set the node hostname
+  ansible.builtin.hostname:
+    name: "{{ lab2_node_fqdn }}"
+
+- name: Configure cluster hostname resolution inside the VMs
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} simple-patroni-npgsql-lab lab2"
+    block: |
+      {% for host in groups['patroni_nodes'] %}
+      {{ hostvars[host].lab2_node_ip }} {{ hostvars[host].lab2_node_fqdn }} {{ hostvars[host].lab2_node_name }}
+      {% endfor %}
+
+- name: Create cluster service directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ lab2_etcd_data_dir }}", owner: etcd, group: etcd, mode: "0700" }
+    - { path: /etc/systemd/system/etcd.service.d, owner: root, group: root, mode: "0755" }
+    - { path: /etc/patroni, owner: postgres, group: postgres, mode: "0700" }
+    - { path: /etc/pgbackrest, owner: postgres, group: postgres, mode: "0750" }
+    - { path: "{{ lab2_postgres_data_dir }}", owner: postgres, group: postgres, mode: "0700" }
+    - { path: /var/lib/pgbackrest, owner: postgres, group: postgres, mode: "0750" }
+    - { path: /var/log/pgbackrest, owner: postgres, group: postgres, mode: "0750" }
+
+- name: Configure etcd
+  ansible.builtin.template:
+    src: etcd.conf.yaml.j2
+    dest: /etc/etcd/etcd.conf.yaml
+    owner: etcd
+    group: etcd
+    mode: "0600"
+
+- name: Make the packaged etcd service use the Lab 2 configuration
+  ansible.builtin.template:
+    src: etcd-override.conf.j2
+    dest: /etc/systemd/system/etcd.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Load softdog now
+  ansible.builtin.command: modprobe softdog
+  changed_when: false
+
+- name: Load softdog after VM boots
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/softdog.conf
+    content: "softdog\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Give Patroni access to watchdog devices after boot
+  ansible.builtin.copy:
+    dest: /etc/udev/rules.d/60-patroni-watchdog.rules
+    content: |
+      KERNEL=="watchdog*", OWNER="postgres", GROUP="postgres", MODE="0600"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply watchdog device ownership now
+  ansible.builtin.file:
+    path: /dev/watchdog
+    owner: postgres
+    group: postgres
+    mode: "0600"
+
+- name: Configure Patroni
+  ansible.builtin.template:
+    src: patroni.yml.j2
+    dest: /etc/patroni/patroni.yml
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  no_log: true
+
+- name: Render the desired Patroni distributed configuration
+  ansible.builtin.template:
+    src: patroni-dcs.yml.j2
+    dest: /etc/patroni/dcs.yml
+    owner: postgres
+    group: postgres
+    mode: "0600"
+
+- name: Configure pgBackRest
+  ansible.builtin.template:
+    src: pgbackrest.conf.j2
+    dest: /etc/pgbackrest/pgbackrest.conf
+    owner: postgres
+    group: postgres
+    mode: "0640"
+
+- name: Install the Patroni systemd unit
+  ansible.builtin.template:
+    src: percona-patroni.service.j2
+    dest: /etc/systemd/system/percona-patroni.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reload systemd units
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Keep raw PostgreSQL disabled
+  ansible.builtin.systemd:
+    name: postgresql-18
+    enabled: false
+    state: stopped
