@@ -30,7 +30,9 @@ If PostgreSQL on the primary stops while Patroni is still running, Patroni first
 
 If the primary VM becomes unavailable, the two remaining etcd members retain quorum, provided they can still communicate. Once the leader lease expires, Patroni can promote an eligible, healthy replica to primary. Failover timing depends on the configured Patroni timeouts.
 
-During a primary failure and promotion, existing client connections to the old primary are lost and new connections may fail temporarily. Npgsql does not automatically retry commands on another host: the client must handle I/O-related errors, open a new primary connection, and retry only operations known to be safe. With asynchronous replication, transactions recently acknowledged by the failed primary can be lost; synchronous replication is required when that risk is unacceptable.
+During a primary failure and promotion, existing client connections to the old primary are lost and new connections may fail temporarily. Npgsql does not automatically retry commands on another host: the client must handle I/O-related errors, open a new primary connection, and retry only operations known to be safe.
+
+Lab 1 uses **quorum commit**, so an acknowledged transaction cannot be lost in a failover: `synchronous_mode: quorum` with `synchronous_node_count: 1` makes Patroni maintain `synchronous_standby_names = ANY 1 (...)`, and a commit is not acknowledged until a standby has flushed it. Patroni tracks the eligible set in the DCS, so only a node known to be caught up can be promoted. This is not `synchronous_mode_strict`: if every standby is lost, Patroni falls back to asynchronous rather than refusing writes, choosing availability at the point where no replica remains to be durable against.
 
 # PoC Labs
 
@@ -243,6 +245,34 @@ watchdog: it catches a hung Patroni or a thrashing machine, but not a kernel
 panic, because then the timer that would fire the reset is not running either.
 Real deployments use a hardware or hypervisor watchdog. Second, in the `patroni`
 scenario PostgreSQL keeps answering as a primary for the whole 25 seconds before
-the reset, so a client that reaches it in that window can commit a write that is
-lost when the node is rewound. Fencing bounds how long that window lasts; it does
-not eliminate it. Synchronous replication is what removes the data-loss risk.
+the reset, so a client that reaches it in that window can still commit. Fencing
+bounds how long that window lasts; it does not eliminate it. What removes the
+data-loss risk is quorum commit, covered below — under it such a commit is not
+acknowledged until a standby has flushed it, so a promoted replica already has it.
+
+### Proving replication is synchronous
+
+```sh
+make test_sync
+```
+
+Failover tests show a new primary appears; they say nothing about whether it has
+your data. `make test_sync` asserts quorum commit at three levels, because the
+first alone would pass on a cluster that merely claims to be synchronous.
+
+| Tier | Asserts |
+| --- | --- |
+| `topology` | `synchronous_standby_names` is an `ANY n (...)` quorum expression rather than `FIRST n`, `synchronous_node_count` is 1, `synchronous_commit` is `on`, and both standbys report `sync_state = quorum` |
+| `blocking` | Both walreceivers are frozen, and the committing backend is then observed parked in `wait_event = SyncRep`. Cancelling it makes PostgreSQL report `canceling wait for synchronous replication` |
+| `durability` | 200 rows are committed, the primary VM is force-stopped with no clean shutdown, and every acknowledged row is present on the promoted node |
+
+The `blocking` tier is the one that cannot be faked. `SyncRep` is PostgreSQL's own
+name for a backend waiting on a synchronous standby, and that wait state cannot
+occur on an asynchronous cluster at all — no timing heuristic is involved.
+
+Two mechanics worth knowing if you adapt this. A frozen walreceiver keeps its TCP
+connection open, so Patroni still counts the standby as present and never degrades
+the quorum: the commit waits indefinitely. And `statement_timeout` will not end
+it, because a synchronous replication wait is only interruptible by an actual
+query cancel — which is why the probe runs in the background and is released with
+`pg_cancel_backend`.

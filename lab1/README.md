@@ -64,6 +64,7 @@ make configure_cluster
 make verify_cluster
 make test_connection    # acceptance criterion 1
 make test_client        # the client's configured guarantees
+make test_sync          # quorum commit really is synchronous
 make test_failover      # acceptance criterion 2
 make test_fencing       # split-brain prevention
 ```
@@ -87,6 +88,12 @@ the primary VM, then killing only the PostgreSQL postmaster on the primary — a
 in both cases starts the client while the cluster still has no primary, so the
 client's retry loop is what carries it to the promoted node. Run one at a time
 with `make test_failover_vm` or `make test_failover_postgres`.
+
+`make test_sync` proves the cluster replicates with quorum commit rather than
+asynchronously: that Patroni has PostgreSQL configured for it, that a commit
+genuinely parks in a `SyncRep` wait when no standby can confirm, and that no
+acknowledged row is lost when the primary is destroyed. See
+[proving replication is synchronous](../README.md#proving-replication-is-synchronous).
 
 `make test_client` proves the client's configured guarantees rather than its
 failover behaviour: that `Maximum Pool Size` is enforced, that `Timeout` and

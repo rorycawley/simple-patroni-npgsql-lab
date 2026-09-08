@@ -11,6 +11,20 @@ retry_timeout: 10
 primary_start_timeout: 0
 maximum_lag_on_failover: 1048576
 check_timeline: true
+
+# Quorum commit: a transaction is not acknowledged to the client until at least
+# synchronous_node_count standbys have flushed it, so a failover cannot lose an
+# acknowledged transaction. Patroni maintains synchronous_standby_names as
+# "ANY 1 (pg1, pg2, pg3)" minus the leader, and tracks the eligible set in the
+# DCS /sync key so only a node known to be caught up can be promoted.
+#
+# node_count 1 of 2 available standbys is the deliberate trade: one standby may
+# fail without blocking writes. This is NOT synchronous_mode_strict, so if every
+# standby is lost Patroni falls back to asynchronous rather than refusing writes
+# -- availability over durability at the point where the cluster has no replica
+# left to be durable against.
+synchronous_mode: quorum
+synchronous_node_count: 1
 postgresql:
   use_pg_rewind: true
   use_slots: true
@@ -20,6 +34,10 @@ postgresql:
     max_wal_senders: 10
     max_replication_slots: 10
     wal_log_hints: "on"
+    # Explicit because quorum commit depends on it: synchronous_standby_names has
+    # no effect unless commits wait for a remote flush. "local" or "off" here
+    # would silently turn the cluster back into asynchronous replication.
+    synchronous_commit: "on"
     password_encryption: scram-sha-256
     ssl: "off"
     archive_mode: "on"

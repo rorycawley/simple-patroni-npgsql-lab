@@ -12,8 +12,8 @@
       - python3-firewall
     state: present
   register: lab1_prereq_packages
-  retries: 3
-  delay: 10
+  retries: 5
+  delay: 15
   until: lab1_prereq_packages is succeeded
 
 - name: Disable Rocky Linux's PostgreSQL module
@@ -26,8 +26,8 @@
     key: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
     state: present
   register: lab1_percona_key
-  retries: 3
-  delay: 10
+  retries: 5
+  delay: 15
   until: lab1_percona_key is succeeded
 
 - name: Install Percona's repository management package
@@ -35,8 +35,8 @@
     name: https://repo.percona.com/yum/percona-release-latest.noarch.rpm
     state: present
   register: lab1_percona_release
-  retries: 3
-  delay: 10
+  retries: 5
+  delay: 15
   until: lab1_percona_release is succeeded
 
 - name: Read the enabled DNF repositories
@@ -51,9 +51,27 @@
     - epel
   when: item not in (lab1_enabled_repos.stdout_lines | map('regex_replace', '\\s.*$', '') | list)
 
-- name: Enable the Percona PostgreSQL 18 repository
-  ansible.builtin.command: percona-release setup ppg18
-  when: lab1_enabled_repos.stdout is not search('ppg-?18')
+# Defined directly rather than via `percona-release setup ppg18`. That command
+# discovers repositories by scraping the HTML index at the hardcoded, non-
+# overridable http://repo.percona.com and filtering out every https link:
+#
+#   REPOSITORIES=$(curl -s ${URL} | tail -n +28 | grep href | grep -v https | ...)
+#
+# Percona now serves that index over https, so the scrape returns an empty list
+# and setup fails with "Specified repository does not exist", even though the
+# repository is present and serving valid metadata. Pointing dnf at the real
+# location removes the dependency on that scrape entirely.
+- name: Define the Percona PostgreSQL 18 repositories
+  ansible.builtin.yum_repository:
+    name: "ppg-18-release-{{ item }}"
+    description: "Percona Distribution for PostgreSQL 18 - release - {{ item }}"
+    baseurl: "https://repo.percona.com/ppg-18/yum/release/$releasever/RPMS/{{ item }}"
+    gpgcheck: true
+    gpgkey: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
+    enabled: true
+  loop:
+    - $basearch
+    - noarch
 
 - name: Install the Percona PostgreSQL HA node packages
   ansible.builtin.dnf:
@@ -65,8 +83,8 @@
       - python3-python-etcd
     state: present
   register: lab1_ha_packages
-  retries: 3
-  delay: 10
+  retries: 5
+  delay: 15
   until: lab1_ha_packages is succeeded
 
 - name: Gather installed service facts

@@ -1,4 +1,4 @@
-.PHONY: help all check clean create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
+.PHONY: help all check clean test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
 
 # `make` on its own prints this help rather than building a cluster, because
 # `all` creates VMs and runs destructive fault injection.
@@ -28,6 +28,7 @@ help:
 	@printf '%s\n' ''
 	@printf '%s\n' 'Client guarantees:'
 	@printf '%s\n' '  test_client        Pool limit, command timeout, and no blind retry'
+	@printf '%s\n' '  test_sync          Quorum commit is configured, blocks, and loses nothing'
 	@printf '%s\n' ''
 	@printf '%s\n' 'Split-brain prevention:'
 	@printf '%s\n' '  test_fencing       Both split-brain scenarios below'
@@ -82,6 +83,9 @@ test_connection:
 
 test_client:
 	./scripts/test-client.sh all
+
+test_sync:
+	./scripts/test-sync-replication.sh all
 
 test_failover:
 	./scripts/test-failover.sh failover
