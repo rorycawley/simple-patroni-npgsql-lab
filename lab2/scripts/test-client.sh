@@ -24,6 +24,7 @@ readonly POSTGRES_BIN_DIR=/usr/pgsql-18/bin
 readonly EXPECTED_MAX_POOL_SIZE=20
 readonly EXPECTED_TIMEOUT=5
 readonly EXPECTED_COMMAND_TIMEOUT=10
+readonly EXPECTED_SSL_MODE=VerifyFull
 
 usage() {
   cat <<'EOF'
@@ -43,6 +44,7 @@ done
 source "$LAB_DIR/.env"
 export LAB2_PG_HOSTS="${PG1_IP},${PG2_IP},${PG3_IP}"
 export LAB2_PGPASS="$LAB_DIR/.secrets/pgpass"
+export LAB2_CA="$LAB_DIR/.secrets/pki/ca.crt"
 
 client_stdout=""
 client_stderr=""
@@ -110,6 +112,7 @@ test_pool() {
 
   assert_equal "configured Maximum Pool Size" "$(jq -r '.maxPoolSize' <<< "$json")" "$EXPECTED_MAX_POOL_SIZE"
   assert_equal "configured Timeout" "$(jq -r '.timeout' <<< "$json")" "$EXPECTED_TIMEOUT"
+  assert_equal "configured SSL Mode" "$(jq -r '.sslMode' <<< "$json")" "$EXPECTED_SSL_MODE"
   assert_equal "connections opened before the limit" "$(jq -r '.opened' <<< "$json")" "$EXPECTED_MAX_POOL_SIZE"
   # The overflow request must be refused, and refused after roughly Timeout --
   # not instantly (which would mean it never waited) and not much later (which

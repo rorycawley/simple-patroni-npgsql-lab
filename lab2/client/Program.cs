@@ -12,6 +12,8 @@ var hosts = Environment.GetEnvironmentVariable("LAB2_PG_HOSTS")
     ?? throw new InvalidOperationException("LAB2_PG_HOSTS is required.");
 var passfile = Environment.GetEnvironmentVariable("LAB2_PGPASS")
     ?? throw new InvalidOperationException("LAB2_PGPASS is required.");
+var rootCertificate = Environment.GetEnvironmentVariable("LAB2_CA")
+    ?? throw new InvalidOperationException("LAB2_CA is required.");
 
 var settings = new NpgsqlConnectionStringBuilder
 {
@@ -24,7 +26,12 @@ var settings = new NpgsqlConnectionStringBuilder
     Timeout = 5,
     CommandTimeout = 10,
     MaxPoolSize = 20,
-    SslMode = SslMode.Disable
+    // VerifyFull, not Require: Require encrypts but accepts any certificate, so
+    // it stops eavesdropping and not impersonation. VerifyFull checks the chain
+    // against the lab CA and that the name matches -- and because the client
+    // connects by address, only an IP SAN can satisfy it.
+    SslMode = SslMode.VerifyFull,
+    RootCertificate = rootCertificate
 };
 
 return mode switch
@@ -167,6 +174,7 @@ async Task<int> RunPoolProbe()
             ok = true,
             maxPoolSize = limit,
             timeout = settings.Timeout,
+            sslMode = settings.SslMode.ToString(),
             opened = limit,
             exhaustedAfterSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 1),
             recoveredAfterSeconds = Math.Round(recovered.Elapsed.TotalSeconds, 1),

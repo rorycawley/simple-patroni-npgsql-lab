@@ -10,5 +10,6 @@ readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LAB_DIR/.env"
 export LAB2_PG_HOSTS="${PG1_IP},${PG2_IP},${PG3_IP}"
 export LAB2_PGPASS="$LAB_DIR/.secrets/pgpass"
+export LAB2_CA="$LAB_DIR/.secrets/pki/ca.crt"
 
 dotnet run --project "$LAB_DIR/client/Lab2.Client.csproj" --configuration Release

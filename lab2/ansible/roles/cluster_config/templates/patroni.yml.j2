@@ -43,6 +43,11 @@ postgresql:
     replication:
       username: replicator
       password: {{ postgres_replication_password | to_json }}
+      # Streaming replication crosses the network, so the replica verifies the
+      # primary rather than merely encrypting to it. The primary's certificate
+      # carries its IP in the SAN, which is what verify-full matches against.
+      sslmode: verify-full
+      sslrootcert: {{ lab2_pki_dir }}/ca.crt
     superuser:
       username: postgres
       password: {{ postgres_superuser_password | to_json }}

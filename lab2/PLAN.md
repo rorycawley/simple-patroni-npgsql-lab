@@ -118,8 +118,9 @@ no certificate is refused on each. etcd additionally negotiates TLS 1.3 and
 rejects TLS 1.2, via `tls-min-version`. The Patroni REST API gets mutual TLS but
 no version floor: Patroni exposes `cafile`, `certfile`, `keyfile`, `ciphers` and
 `verify_client`, and no minimum-version setting, so pinning it is not available
-rather than merely unset. PostgreSQL's floor arrives in P5 through
-`ssl_min_protocol_version`.
+rather than merely unset. PostgreSQL's floor arrives in P5, but at
+TLSv1.2 rather than 1.3: .NET on macOS cannot negotiate TLS 1.3 at all, so
+pinning 1.3 would break the client this lab exists to exercise.
 
 ### P5 — TLS on PostgreSQL and the client
 
