@@ -49,12 +49,9 @@ The dynamic inventory reads addresses from the generated `.env` file and uses
 Lima's generated SSH configuration, so neither guest IPs nor forwarded SSH
 ports are hard-coded.
 
-The Percona repository is defined directly rather than through
-`percona-release setup ppg18`. That command discovers repositories by scraping
-the HTML index at a hardcoded `http://repo.percona.com` and filtering out every
-https link; Percona now serves that index over https, so the scrape returns
-nothing and setup fails with "Specified repository does not exist" even though
-the repository is present and serving valid metadata.
+The Percona PostgreSQL 18 repository is defined directly as a `yum_repository`
+rather than through `percona-release setup`, so package installation does not
+depend on that tool's repository discovery.
 
 ## Run
 

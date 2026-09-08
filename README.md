@@ -72,12 +72,11 @@ The client reads the three host addresses from `LAB1_PG_HOSTS`, which
 `pg2.lab.example`, and `pg3.lab.example` names are equivalent, but only resolve
 on macOS after `make configure_hostnames` has written them to `/etc/hosts`.
 
-A multi-host Npgsql data source reports a failed connection attempt as an
-`NpgsqlException` wrapping an `AggregateException` of the per-host failures.
-That wrapper leaves `NpgsqlException.IsTransient` false, so a retry predicate
-built on `IsTransient` alone never fires during the failover window. The client
-unwraps the aggregate and retries the individual failures, while still failing
-immediately on a `PostgresException` such as a rejected password.
+While no host is an eligible primary, the client retries the connection against a
+90-second budget, which covers Patroni's worst case of `ttl` (30s) plus
+`loop_wait` (10s) plus promotion time. Retries are scoped to connection failures:
+a rejected password or a missing database fails immediately rather than being
+reattempted, and a write is never reissued.
 
 #### Proving the client's configured guarantees
 
@@ -85,52 +84,22 @@ immediately on a `PostgresException` such as a rejected password.
 make test_client
 ```
 
-Failover tests show the client survives; they say nothing about whether the pool
-limit or the timeouts are real, or whether the client would quietly double-write
+Failover tests show the client survives, but say nothing about whether the pool
+limit and timeouts are real, or whether the client would quietly double-write
 after a lost acknowledgement. `make test_client` asserts those three directly.
-Each probe reuses the same `NpgsqlConnectionStringBuilder` as the write probe, so
-the assertions cannot drift from the shipped configuration, while the *expected*
-values live in `scripts/test-client.sh` — changing a setting in `Program.cs`
-therefore fails the test instead of quietly testing the new value.
 
 | Probe | Asserts |
 | --- | --- |
-| `pool` | Exactly `Maximum Pool Size` connections open; the next one is refused after about `Timeout` seconds, not instantly and not indefinitely; releasing one lets the next straight through, which distinguishes a pool limit from a saturated server. |
+| `pool` | Exactly `Maximum Pool Size` connections open; the next is refused after about `Timeout`, not instantly and not indefinitely; releasing one lets the next straight through, which distinguishes a pool limit from a saturated server. |
 | `command-timeout` | A `pg_sleep` three times longer than `Command Timeout` is cut off at roughly `Command Timeout`. Lab 1 sets no server-side `statement_timeout`, so only the client-side value can end it. |
-| `uncertain-write` | The hazard in full: a commit that is durable but never acknowledged, and a client that reports failure without reissuing the write. |
+| `uncertain-write` | A commit that is durable but never acknowledged, and a client that reports failure without reissuing the write. |
 
-The `uncertain-write` probe issues one round trip that commits and then blocks:
-
-```sql
-BEGIN; INSERT INTO ha_probe ...; COMMIT; SELECT pg_sleep(60);
-```
-
-The harness waits until a *third-party* session can see the row — proving the
-commit is durable — then calls `pg_terminate_backend` on the client. The client
-therefore fails on an operation that actually succeeded, and cannot tell. It must
-exit non-zero and leave exactly one row. The explicit `COMMIT` is load-bearing:
-PostgreSQL wraps a multi-statement simple query in one implicit transaction, so
-without it the insert would roll back and there would be no uncertainty to test.
-
-Two details make that assertion honest. The row count is taken on a **per-run
-`client_name`, not on `probe_id`** — `probe_id` is a primary key, so a retry
-reusing it would merely hit a duplicate-key error, while the realistic naive
-retry reissues the operation with a fresh id and would be invisible to a
-`probe_id` count. And the assertion is verified against a deliberately broken
-client: with a blind retry spliced into the failure path, every other assertion
-still passes and only the row count catches it, reporting `2` instead of `1`.
-
-One incidental finding worth knowing if you write your own retry logic: after a
-`57P01` termination, Npgsql marks the host bad in its cluster-state cache and an
-immediate reconnect fails with `No suitable host was found` until
-`HostRecheckSeconds` (default 10) elapses.
-
-Those retries run against a 90-second budget rather than a fixed attempt count.
-The two failure modes fail at different speeds — an unreachable host costs up to
-the five-second `Timeout`, while a node whose postmaster was killed refuses
-instantly — so a fixed attempt count would cover very different amounts of wall
-clock depending on which fault occurred. The budget covers Patroni's worst case
-of `ttl` (30s) plus `loop_wait` (10s) plus promotion time, with margin.
+The `uncertain-write` probe commits a row and then blocks, and the harness waits
+until a third-party session can see that row — proving the commit is durable —
+before terminating the client's backend. The client therefore fails on an
+operation that actually succeeded, and cannot tell. It must exit non-zero and
+leave exactly one row: reporting success would be a lie, and a second row would
+mean it had blindly retried a write whose outcome it did not know.
 
 Configure authentication through Patroni's cluster-wide `pg_hba` configuration, using a narrow `host appdb app_runtime <client-network> scram-sha-256` rule. The `app_runtime` role must be non-superuser and have only the permissions needed by the application.
 
@@ -228,11 +197,10 @@ t+32s  back up, new boot id           t+50s  boot id unchanged, no reboot
        => fenced by reset                    => stepped down voluntarily
 ```
 
-Each scenario asserts the mechanism, not just the end state. `patroni` reads
-`/proc/sys/kernel/random/boot_id` before and after and requires it to **change**,
-which only a real kernel restart does. `etcd` requires `pg_is_in_recovery()` to
-flip true while that same boot id stays **unchanged**, proving the node stepped
-down rather than being reset. Swapping the two outcomes fails the test.
+Each scenario asserts the mechanism rather than the end state, by comparing
+`/proc/sys/kernel/random/boot_id` before and after: `patroni` requires it to
+change, which only a real kernel restart does, while `etcd` requires it to stay
+the same, proving the node stepped down rather than being reset.
 
 This is also why `watchdog.mode` is `required` in `patroni.yml`: if Patroni
 cannot arm the watchdog it refuses to be primary at all, because it would have no
@@ -240,7 +208,7 @@ way to fence itself later. That makes the `/dev/watchdog` ownership check in
 `verify_cluster` a prerequisite, not a nicety — without it the cluster never
 elects a leader.
 
-Two honest limits. First, `softdog` is a kernel timer emulating a hardware
+Two limits are worth stating. First, `softdog` is a kernel timer emulating a hardware
 watchdog: it catches a hung Patroni or a thrashing machine, but not a kernel
 panic, because then the timer that would fire the reset is not running either.
 Real deployments use a hardware or hypervisor watchdog. Second, in the `patroni`
@@ -266,13 +234,6 @@ first alone would pass on a cluster that merely claims to be synchronous.
 | `blocking` | Both walreceivers are frozen, and the committing backend is then observed parked in `wait_event = SyncRep`. Cancelling it makes PostgreSQL report `canceling wait for synchronous replication` |
 | `durability` | 200 rows are committed, the primary VM is force-stopped with no clean shutdown, and every acknowledged row is present on the promoted node |
 
-The `blocking` tier is the one that cannot be faked. `SyncRep` is PostgreSQL's own
-name for a backend waiting on a synchronous standby, and that wait state cannot
-occur on an asynchronous cluster at all — no timing heuristic is involved.
-
-Two mechanics worth knowing if you adapt this. A frozen walreceiver keeps its TCP
-connection open, so Patroni still counts the standby as present and never degrades
-the quorum: the commit waits indefinitely. And `statement_timeout` will not end
-it, because a synchronous replication wait is only interruptible by an actual
-query cancel — which is why the probe runs in the background and is released with
-`pg_cancel_backend`.
+The `blocking` tier is the decisive one. `SyncRep` is PostgreSQL's own name for a
+backend waiting on a synchronous standby, so that wait state cannot occur on an
+asynchronous cluster at all — no timing heuristic is involved.
