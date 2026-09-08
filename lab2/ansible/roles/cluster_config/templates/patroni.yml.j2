@@ -5,9 +5,32 @@ name: {{ lab2_node_name }}
 restapi:
   listen: 0.0.0.0:8008
   connect_address: {{ lab2_node_ip }}:8008
+  # verify_client: required makes this mutual. Patroni also uses these same
+  # files as its *client* certificate when polling other members' REST APIs,
+  # which is why the patroni identity carries both serverAuth and clientAuth.
+  certfile: {{ lab2_pki_dir }}/patroni.crt
+  keyfile: {{ lab2_pki_dir }}/patroni.key
+  cafile: {{ lab2_pki_dir }}/ca.crt
+  verify_client: required
+
+# patronictl runs as a client of the REST API above. Without this section every
+# patronictl invocation in the playbooks and test scripts fails the moment
+# verify_client is required.
+ctl:
+  certfile: {{ lab2_pki_dir }}/patroni.crt
+  keyfile: {{ lab2_pki_dir }}/patroni.key
+  cacert: {{ lab2_pki_dir }}/ca.crt
+  insecure: false
 
 etcd3:
   hosts: {% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab2_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}
+
+  protocol: https
+  cacert: {{ lab2_pki_dir }}/ca.crt
+  # A dedicated client identity, not the etcd server certificate: clientAuth
+  # only, so it cannot be replayed to impersonate an etcd member.
+  cert: {{ lab2_pki_dir }}/dcs-client.crt
+  key: {{ lab2_pki_dir }}/dcs-client.key
 
 postgresql:
   cluster_name: {{ lab2_cluster_name }}

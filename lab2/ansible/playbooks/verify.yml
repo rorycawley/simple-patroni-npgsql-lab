@@ -64,10 +64,10 @@
   become: true
   gather_facts: false
   vars:
-    lab2_etcd_endpoints: "{% for host in groups['patroni_nodes'] %}http://{{ hostvars[host].lab2_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
+    lab2_etcd_endpoints: "{% for host in groups['patroni_nodes'] %}https://{{ hostvars[host].lab2_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
   tasks:
     - name: Verify all etcd endpoints
-      ansible.builtin.command: etcdctl --endpoints={{ lab2_etcd_endpoints }} endpoint health
+      ansible.builtin.command: etcdctl {{ lab2_etcdctl_tls }} --endpoints={{ lab2_etcd_endpoints }} endpoint health
       environment:
         ETCDCTL_API: "3"
       changed_when: false

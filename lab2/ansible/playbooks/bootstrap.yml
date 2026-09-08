@@ -13,8 +13,13 @@
 
     - name: Wait for PostgreSQL to become healthy on this node
       ansible.builtin.uri:
-        url: http://127.0.0.1:8008/health
+        # The REST API now requires a client certificate, so the probe presents
+        # one. localhost is in the certificate's SAN for exactly this call.
+        url: https://127.0.0.1:8008/health
         status_code: 200
+        client_cert: "{{ lab2_pki_dir }}/patroni.crt"
+        client_key: "{{ lab2_pki_dir }}/patroni.key"
+        ca_path: "{{ lab2_pki_dir }}/ca.crt"
       register: lab2_postgres_health
       retries: 60
       delay: 2

@@ -6,6 +6,14 @@
 # Ownership follows the service that reads the key, because PostgreSQL and etcd
 # both refuse to start on a key that is group- or world-readable.
 
+- name: Ensure the lab configuration directory is traversable
+  ansible.builtin.file:
+    path: "{{ lab2_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Create the PKI directory
   ansible.builtin.file:
     path: "{{ lab2_pki_dir }}"

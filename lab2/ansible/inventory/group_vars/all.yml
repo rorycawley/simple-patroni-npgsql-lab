@@ -9,13 +9,20 @@ lab2_etcd_data_dir: /var/lib/etcd/lab2
 # distinct from each other and from the root disk: the guest resolves which
 # device is which by size, because attachment order is not a contract.
 lab2_volume_fstype: xfs
-lab2_luks_key_dir: /etc/lab2/luks
+lab2_config_dir: /etc/lab2
+lab2_luks_key_dir: "{{ lab2_config_dir }}/luks"
 
 # TLS material. One certificate per purpose rather than one per node, so that a
 # stolen key for one service cannot authenticate as another. The owner is the
 # service that reads the key: PostgreSQL and etcd both refuse to start on a key
 # that is group- or world-readable.
-lab2_pki_dir: /etc/lab2/pki
+lab2_pki_dir: "{{ lab2_config_dir }}/pki"
+# etcd requires a client certificate once client-cert-auth is on, so every
+# etcdctl invocation needs these. Defined once rather than per call site.
+lab2_etcdctl_tls: >-
+  --cacert {{ lab2_pki_dir }}/ca.crt
+  --cert {{ lab2_pki_dir }}/etcd.crt
+  --key {{ lab2_pki_dir }}/etcd.key
 lab2_pki_source: "{{ playbook_dir }}/../../.secrets/pki"
 lab2_tls_identities:
   - name: postgres

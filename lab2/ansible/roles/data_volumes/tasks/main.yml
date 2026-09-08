@@ -54,6 +54,18 @@
   loop_control:
     label: "{{ item.item.name }} -> {{ item.stdout_lines[0] }}"
 
+# Created explicitly and traversable. Left implicit, Ansible would create it
+# with the 0700 of the key directory below, and every service user would then be
+# unable to reach its certificates in the sibling pki directory -- which fails
+# as "permission denied" on a file whose own mode is perfectly correct.
+- name: Create the lab configuration directory
+  ansible.builtin.file:
+    path: "{{ lab2_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Create the LUKS key directory
   ansible.builtin.file:
     path: "{{ lab2_luks_key_dir }}"

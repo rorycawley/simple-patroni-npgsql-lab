@@ -113,9 +113,13 @@ needs the same treatment: `--client-cert-auth` makes every bare `etcdctl
 endpoint health` in `start-etcd.yml` and `verify.yml` fail until each call passes
 `--cacert`, `--cert` and `--key`.
 **Serves.** AC-2, AC-3.
-**Done when.** Plaintext is refused on 2379, 2380 and 8008, a client with no
-certificate is refused on each, and every endpoint negotiates TLS 1.3 while
-rejecting TLS 1.2 with a protocol-version alert.
+**Done when.** Plaintext is refused on 2379, 2380 and 8008, and a client with
+no certificate is refused on each. etcd additionally negotiates TLS 1.3 and
+rejects TLS 1.2, via `tls-min-version`. The Patroni REST API gets mutual TLS but
+no version floor: Patroni exposes `cafile`, `certfile`, `keyfile`, `ciphers` and
+`verify_client`, and no minimum-version setting, so pinning it is not available
+rather than merely unset. PostgreSQL's floor arrives in P5 through
+`ssl_min_protocol_version`.
 
 ### P5 — TLS on PostgreSQL and the client
 
@@ -187,6 +191,26 @@ proves only that the failure has not happened yet.
 Availability regressions from encryption — slower unlock, slower fsync, longer
 failover — need no separate entry, because AC-4 already runs the whole Lab 1
 suite after every phase rather than once at the end.
+
+## Carried into Lab 3
+
+Backups are Lab 3, and it will use MinIO as the repository. Two decisions from
+this phase already accommodate that, recorded so they are not rediscovered:
+
+- **One CA, extended.** Lab 3 issues a `minio` identity from this same CA rather
+  than standing up a second one; `generate-pki.sh` needs one more `sign_cert`
+  call and the `.spec` reissue mechanism covers it. This is what the sibling lab
+  does, and it is why P3 was built around per-purpose identities rather than one
+  certificate per node.
+- **MinIO can run on the control machine, not a fourth VM.** The sibling lab's
+  MinIO certificate carries `DNS:host.lima.internal` and `IP:192.168.105.1` --
+  the macOS side of Lima's shared network -- so the nodes reach an object store
+  on the host. That avoids the resource pressure that ruled out a Tang server
+  here.
+
+Lab 3 then has both halves of the backup story: TLS in transit to the object
+store, and `repo1-cipher-type=aes-256-cbc` for the repository at rest, which is
+the gap left open when backups were scoped out of Lab 2.
 
 ## Traceability
 

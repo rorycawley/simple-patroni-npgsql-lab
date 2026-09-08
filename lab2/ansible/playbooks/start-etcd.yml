@@ -16,11 +16,11 @@
   become: true
   gather_facts: false
   vars:
-    lab2_etcd_endpoints: "{% for host in groups['patroni_nodes'] %}http://{{ hostvars[host].lab2_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
+    lab2_etcd_endpoints: "{% for host in groups['patroni_nodes'] %}https://{{ hostvars[host].lab2_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
   tasks:
     - name: Wait for every etcd endpoint to be healthy
       ansible.builtin.command: >-
-        etcdctl --endpoints={{ lab2_etcd_endpoints }} endpoint health
+        etcdctl {{ lab2_etcdctl_tls }} --endpoints={{ lab2_etcd_endpoints }} endpoint health
       environment:
         ETCDCTL_API: "3"
       register: lab2_etcd_health
@@ -31,7 +31,7 @@
 
     - name: List etcd members
       ansible.builtin.command: >-
-        etcdctl --endpoints={{ lab2_etcd_endpoints }} member list --write-out=table
+        etcdctl {{ lab2_etcdctl_tls }} --endpoints={{ lab2_etcd_endpoints }} member list --write-out=table
       environment:
         ETCDCTL_API: "3"
       register: lab2_etcd_members
