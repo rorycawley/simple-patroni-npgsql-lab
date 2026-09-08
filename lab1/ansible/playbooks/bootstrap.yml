@@ -52,5 +52,9 @@
       until:
         - (lab1_patroni_members.stdout | from_json | length) == 3
         - (lab1_patroni_members.stdout | from_json | selectattr('Role', 'equalto', 'Leader') | list | length) == 1
-        - (lab1_patroni_members.stdout | from_json | selectattr('Role', 'equalto', 'Replica') | selectattr('State', 'equalto', 'streaming') | list | length) == 2
+        # Counted as "not the leader and streaming" rather than by role name.
+        # Patroni renames the standby role according to the replication mode --
+        # it is "Replica" asynchronously but "Quorum Standby" under quorum
+        # commit -- so matching 'Replica' literally would wait forever here.
+        - (lab1_patroni_members.stdout | from_json | rejectattr('Role', 'equalto', 'Leader') | selectattr('State', 'equalto', 'streaming') | list | length) == 2
       changed_when: false

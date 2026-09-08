@@ -22,16 +22,17 @@ then runs every check and prints one summary:
  Lab 1 results
 ==============================================================================
  PASS  Create the three Lima VMs                                            1s
- PASS  Install and configure the Patroni cluster                           24s
- PASS  Cluster services, quorum, replication, pgBackRest                    5s
+ PASS  Install and configure the Patroni cluster                           20s
+ PASS  Cluster services, quorum, replication, pgBackRest                    4s
  PASS  Criterion 1: client connects to the primary and queries it           1s
- PASS  Client guarantees: pool limit, timeouts, no blind retry             18s
- PASS  Criterion 2: failover after the primary VM is lost                  55s
- PASS  Criterion 2: failover after PostgreSQL is killed                    15s
- PASS  Split brain: softdog fences a frozen Patroni                        46s
- PASS  Split brain: Patroni demotes itself without etcd                    55s
+ PASS  Client guarantees: pool limit, timeouts, no blind retry             19s
+ PASS  Quorum commit: configured, blocking, and lossless                   53s
+ PASS  Criterion 2: failover after the primary VM is lost                1m00s
+ PASS  Criterion 2: failover after PostgreSQL is killed                    14s
+ PASS  Split brain: softdog fences a frozen Patroni                        35s
+ PASS  Split brain: Patroni demotes itself without etcd                    47s
 ------------------------------------------------------------------------------
- 9 passed, 0 failed, total 3m40s
+ 10 passed, 0 failed, total 4m14s
 ==============================================================================
 ```
 

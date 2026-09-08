@@ -6,12 +6,15 @@ Patroni-managed Percona PostgreSQL 18 cluster.
 It follows Percona's RPM and HA guidance:
 
 - enables EPEL and CRB, disables Rocky's PostgreSQL module, configures the
-  Percona `ppg18` repository, and installs PostgreSQL, Patroni, etcd, and
+  Percona PostgreSQL 18 repository, and installs PostgreSQL, Patroni, etcd, and
   pgBackRest;
 - does not run `postgresql-18-setup initdb` or start `postgresql-18` directly,
   because Patroni must initialize and own PostgreSQL;
 - forms a static three-member etcd cluster, starts Patroni on each node, and
   verifies one leader plus two streaming replicas;
+- configures quorum commit (`synchronous_mode: quorum`, `synchronous_node_count: 1`,
+  and an explicit `synchronous_commit: on`, without which the quorum expression
+  would be inert), so an acknowledged transaction cannot be lost in a failover;
 - configures and verifies `softdog` watchdog fencing;
 - creates a least-privilege `app_runtime` login, `appdb`, and the write-probe
   table;
@@ -46,22 +49,28 @@ The dynamic inventory reads addresses from the generated `.env` file and uses
 Lima's generated SSH configuration, so neither guest IPs nor forwarded SSH
 ports are hard-coded.
 
+The Percona repository is defined directly rather than through
+`percona-release setup ppg18`. That command discovers repositories by scraping
+the HTML index at a hardcoded `http://repo.percona.com` and filtering out every
+https link; Percona now serves that index over https, so the scrape returns
+nothing and setup fails with "Specified repository does not exist" even though
+the repository is present and serving valid metadata.
+
 ## Run
 
-From `lab1`:
+From `lab1`, `make all` does everything and reports; see the
+[Lab 1 guide](../README.md) for the individual phases:
 
 ```sh
-make create_vms
-make configure_cluster
-make verify_cluster
-make test_failover
+make all
 ```
 
 `configure_cluster` installs the required Ansible collection and generates
 static lab passwords in ignored, mode-`0600` files under `.secrets/` if they do
 not already exist. `verify_cluster` performs service, etcd, Patroni,
 replication, watchdog, and pgBackRest checks, then runs a real Npgsql
-primary-only read/write test.
+primary-only read/write test. `test_sync`, `test_client`, `test_failover`, and
+`test_fencing` are the fault-injection and guarantee checks.
 
 Run `make configure_hostnames` in an interactive terminal if you also want
 `pg1.lab.example`, `pg2.lab.example`, and `pg3.lab.example` in macOS

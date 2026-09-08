@@ -11,7 +11,7 @@ The .NET C# application will be resilient to failover, with short connection tim
 | Component | Role |
 | --- | --- |
 | Npgsql | .NET PostgreSQL driver. It connects directly to the configured hosts, selects the current primary for writes, and provides connection pooling. |
-| Patroni | Manages PostgreSQL instances, records cluster state in etcd, and orchestrates promotion and failover. |
+| Patroni | Manages PostgreSQL instances, records cluster state in etcd, and orchestrates promotion and failover. It also maintains `synchronous_standby_names` for quorum commit, so only a standby known to be caught up is eligible for promotion. |
 | etcd | Distributed configuration store that holds Patroni cluster state and elects a single leader through quorum. |
 | Linux watchdog (`softdog`) | Armed by Patroni on the leader only, and petted on every successful leader-key renewal. If renewals stop, it resets the node at `ttl - safety_margin`, fencing it so a promoted replica cannot end up alongside a still-writable old primary. |
 | pgBackRest | Provides PostgreSQL backup, WAL archiving, and restore capabilities. It supports disaster recovery, not automatic failover. |
