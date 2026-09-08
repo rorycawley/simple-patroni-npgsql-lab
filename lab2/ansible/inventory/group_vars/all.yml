@@ -9,6 +9,7 @@ lab2_etcd_data_dir: /var/lib/etcd/lab2
 # distinct from each other and from the root disk: the guest resolves which
 # device is which by size, because attachment order is not a contract.
 lab2_volume_fstype: xfs
+lab2_luks_key_dir: /etc/lab2/luks
 lab2_data_volumes:
   - name: pgdata
     path: /var/lib/pgsql

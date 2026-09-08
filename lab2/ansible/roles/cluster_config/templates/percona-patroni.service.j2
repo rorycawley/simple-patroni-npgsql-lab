@@ -9,6 +9,9 @@ RequiresMountsFor={{ lab2_postgres_data_dir }}
 
 [Service]
 Type=simple
+# Second layer: RequiresMountsFor above catches a mount that fails, but not one
+# that was never configured. This refuses to start on the root filesystem.
+ExecStartPre=/usr/local/sbin/lab2-require-volume /var/lib/pgsql /dev/mapper/lab2-pgdata
 User=postgres
 Group=postgres
 ExecStart=/usr/bin/patroni /etc/patroni/patroni.yml

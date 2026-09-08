@@ -1,12 +1,21 @@
 ---
-# Puts each service's data directory on its own block device.
+# Puts each service's data directory on its own LUKS2-encrypted block device.
 #
-# Lima does not hand these over raw: it partitions each additional disk, formats
+# Lima does not hand additional disks over raw: it partitions each one, formats
 # it ext4 and mounts it under /mnt/lima-<disk>, with no /etc/fstab entry. So the
-# first thing to do is take the device back.
+# device has to be taken back before it can be encrypted.
 #
 # Devices are identified by size, not by attachment order or kernel name, since
 # neither is a contract. The sizes are required to be distinct.
+
+- name: Install cryptsetup
+  ansible.builtin.dnf:
+    name: cryptsetup
+    state: present
+  register: lab2_cryptsetup
+  retries: 5
+  delay: 15
+  until: lab2_cryptsetup is succeeded
 
 - name: Resolve each data volume to a block device by size
   ansible.builtin.shell: |
@@ -33,52 +42,117 @@
   loop_control:
     label: "{{ item.item.name }}"
 
-- name: Build the volume-to-device map
+- name: Build the volume map
   ansible.builtin.set_fact:
-    lab2_volumes: "{{ lab2_volumes | default([]) + [item.item | combine({'device': item.stdout_lines[0]})] }}"
+    lab2_volumes: >-
+      {{ lab2_volumes | default([]) + [item.item | combine({
+           'device': item.stdout_lines[0],
+           'mapper': 'lab2-' ~ item.item.name,
+           'keyfile': lab2_luks_key_dir ~ '/' ~ item.item.name ~ '.key'
+         })] }}
   loop: "{{ lab2_volume_devices.results }}"
   loop_control:
     label: "{{ item.item.name }} -> {{ item.stdout_lines[0] }}"
 
-- name: Take each device back from Lima and format it
+- name: Create the LUKS key directory
+  ansible.builtin.file:
+    path: "{{ lab2_luks_key_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Generated on the node, so the key never crosses the network or touches the
+# control machine. It protects a detached or discarded disk image, not a live
+# host -- see the threat model in README.md.
+- name: Generate a keyfile for each volume
   ansible.builtin.shell: |
     set -o pipefail
-    device="{{ item.device }}"
-    for mounted in $(findmnt -rno TARGET,SOURCE | awk -v d="$device" '$2 ~ "^"d {print $1}'); do
-      umount "$mounted"
-    done
-    # Reformat only when the whole device is not already our filesystem, so a
-    # rerun against a populated cluster cannot destroy it.
-    if [ "$(lsblk -dno FSTYPE "$device")" != "{{ lab2_volume_fstype }}" ]; then
-      wipefs -a "$device"
-      mkfs.{{ lab2_volume_fstype }} -q -f "$device"
-      echo formatted
-    fi
+    umask 077
+    head -c 512 /dev/urandom > "{{ item.keyfile }}"
+    chmod 400 "{{ item.keyfile }}"
   args:
     executable: /bin/bash
-  register: lab2_volume_format
-  changed_when: "'formatted' in lab2_volume_format.stdout"
+    creates: "{{ item.keyfile }}"
+  loop: "{{ lab2_volumes }}"
+  loop_control:
+    label: "{{ item.keyfile }}"
+
+- name: Encrypt, open and format each data volume
+  ansible.builtin.shell: |
+    set -euo pipefail
+    device="{{ item.device }}"
+    mapper="{{ item.mapper }}"
+    keyfile="{{ item.keyfile }}"
+    changed=""
+
+    if ! cryptsetup isLuks "$device"; then
+      # Take the device back from Lima before claiming it.
+      for mounted in $(findmnt -rno TARGET,SOURCE | awk -v d="$device" '$2 ~ "^"d {print $1}'); do
+        umount "$mounted"
+      done
+      wipefs -a "$device" >/dev/null
+      cryptsetup luksFormat --type luks2 --batch-mode --key-file "$keyfile" "$device"
+      changed="yes"
+    fi
+
+    if [ ! -e "/dev/mapper/$mapper" ]; then
+      cryptsetup luksOpen --key-file "$keyfile" "$device" "$mapper"
+      changed="yes"
+    fi
+
+    # Format only an unformatted mapper device, so a rerun against a live
+    # cluster cannot destroy it.
+    if [ "$(lsblk -dno FSTYPE "/dev/mapper/$mapper")" != "{{ lab2_volume_fstype }}" ]; then
+      mkfs.{{ lab2_volume_fstype }} -q -f "/dev/mapper/$mapper"
+      changed="yes"
+    fi
+
+    [ -n "$changed" ] && echo changed || true
+  args:
+    executable: /bin/bash
+  register: lab2_volume_luks
+  changed_when: "'changed' in lab2_volume_luks.stdout"
   loop: "{{ lab2_volumes }}"
   loop_control:
     label: "{{ item.name }} on {{ item.device }}"
 
-- name: Read each volume's filesystem UUID
-  ansible.builtin.command: "blkid -s UUID -o value {{ item.device }}"
-  register: lab2_volume_uuids
+- name: Read each volume's LUKS UUID
+  ansible.builtin.command: "cryptsetup luksUUID {{ item.device }}"
+  register: lab2_luks_uuids
   changed_when: false
   loop: "{{ lab2_volumes }}"
   loop_control:
     label: "{{ item.name }}"
 
-# Mounting by UUID rather than /dev/vdX, because kernel names depend on
-# enumeration order and would silently swap the two volumes.
-- name: Mount each data volume by UUID and persist it in fstab
+- name: Configure unattended unlock at boot
+  ansible.builtin.template:
+    src: crypttab.j2
+    dest: /etc/crypttab
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    lab2_crypttab_entries: "{{ lab2_volumes | zip(lab2_luks_uuids.results | map(attribute='stdout') | list) | list }}"
+
+- name: Install the mount guard used by the service units
+  ansible.builtin.copy:
+    src: lab2-require-volume
+    dest: /usr/local/sbin/lab2-require-volume
+    owner: root
+    group: root
+    mode: "0755"
+
+# Mounted from /dev/mapper/<name>, which is stable because the crypttab name is
+# ours. If the volume fails to unlock the device is simply absent, the mount
+# fails, and RequiresMountsFor stops the service.
+- name: Mount each data volume and persist it in fstab
   ansible.posix.mount:
-    path: "{{ item.0.path }}"
-    src: "UUID={{ item.1.stdout | trim }}"
+    path: "{{ item.path }}"
+    src: "/dev/mapper/{{ item.mapper }}"
     fstype: "{{ lab2_volume_fstype }}"
     opts: defaults
     state: mounted
-  loop: "{{ lab2_volumes | zip(lab2_volume_uuids.results) | list }}"
+  loop: "{{ lab2_volumes }}"
   loop_control:
-    label: "{{ item.0.path }} <- UUID={{ item.1.stdout | trim }}"
+    label: "{{ item.path }} <- /dev/mapper/{{ item.mapper }}"

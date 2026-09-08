@@ -121,6 +121,7 @@ main() {
   esac
 
   run_phase "Cluster services, quorum, replication, pgBackRest" verify_cluster optional
+  run_phase "Encryption at rest: LUKS2 volumes, and a missing one stops the service" test_at_rest optional
   run_phase "Criterion 1: client connects to the primary and queries it" test_connection optional
   run_phase "Client guarantees: pool limit, timeouts, no blind retry" test_client optional
   run_phase "Quorum commit: configured, blocking, and lossless" test_sync optional

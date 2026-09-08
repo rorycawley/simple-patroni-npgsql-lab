@@ -3,5 +3,6 @@
 RequiresMountsFor={{ lab2_etcd_data_dir }}
 
 [Service]
+ExecStartPre=/usr/local/sbin/lab2-require-volume /var/lib/etcd /dev/mapper/lab2-etcd
 ExecStart=
 ExecStart=/usr/bin/etcd --config-file=/etc/etcd/etcd.conf.yaml
