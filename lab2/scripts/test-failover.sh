@@ -311,8 +311,8 @@ run_scenario() {
   # Begin from a settled cluster. Fault-injection scenarios run back to back,
   # and one that starts while a node from the previous scenario is still
   # catching up can see promotion delayed past its window: Patroni will not
-  # promote a candidate that is lagging, so the wait below expires against a
-  # cluster that was never unhealthy, only busy.
+  # promote a lagging candidate, so the wait below expires against a cluster
+  # that was never unhealthy, only busy.
   wait_for_healthy_cluster "$(other_vm)" || {
     echo "The cluster was not healthy before injecting the fault" >&2
     return 1
