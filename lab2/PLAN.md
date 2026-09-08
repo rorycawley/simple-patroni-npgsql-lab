@@ -213,6 +213,25 @@ Lab 3 then has both halves of the backup story: TLS in transit to the object
 store, and `repo1-cipher-type=aes-256-cbc` for the repository at rest, which is
 the gap left open when backups were scoped out of Lab 2.
 
+## What the build changed
+
+Each phase landed, but four things turned out differently from the plan. They
+are recorded because the reasoning matters more than the plan being right.
+
+| Planned | Actual |
+| --- | --- |
+| A TLS 1.3 floor on every endpoint | Patroni's REST API exposes no minimum-version setting, so 8008 cannot be pinned. etcd and PostgreSQL are at 1.3 |
+| The client stays on the host, as in Lab 1 | Moved to `lab2-app1`. .NET on macOS uses Apple's TLS stack, which does not implement TLS 1.3, so PostgreSQL could not be pinned above 1.2 while the client lived there |
+| Three VMs | Four. The application host is the direct consequence of the row above, and it makes the failover tests cross the same network and rules as a real client |
+| `RequiresMountsFor=` alone would stop a service starting without its volume | It pulls the mount unit in, so systemd repairs the mount and starts normally. The guard is the `ExecStartPre` check, and the property worth asserting is that the service never runs on the wrong device, not that it refuses to start |
+
+Two bugs were found only by building from empty rather than iterating on a
+running cluster: `/etc/lab2` was created `0700` as a side effect of the LUKS key
+directory, so every service was denied its certificates with a "permission
+denied" that looked exactly like SELinux; and the Rocky image ships no `libicu`,
+without which .NET aborts before `Main`. Self-contained publishing removes the
+need for a runtime, not for system libraries.
+
 ## Traceability
 
 | Criterion | Built in | Proven by |

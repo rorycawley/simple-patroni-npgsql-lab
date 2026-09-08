@@ -1,7 +1,8 @@
 # Lab 2: encrypted at rest and in transit
 
-> **Status: specification.** Nothing in this directory is implemented yet. The
-> tables below define what will be built and how it will be proven.
+> **Status: built and verified.** `make all` reports every check green from
+> scratch. Where the result differs from the original plan the reason is stated
+> below rather than the plan quietly rewritten.
 
 ## Goal
 
@@ -22,6 +23,7 @@ to anyone on the wire between components.
 | Key material held in a root-only keyfile on each node | KMS, HSM, TPM or network-bound unlock (Tang/Clevis) |
 | A private CA issuing per-purpose certificates at build time | Public PKI, certificate rotation, revocation, OCSP |
 | TLS on every channel below, mutual where the peer is a machine | Client authentication by certificate for the application (SCRAM inside TLS) |
+| The application on its own VM, so it crosses the network like a real client | Hardening the application as a service; it is invoked per test, not long-running |
 | — | Backups. pgBackRest is carried over from Lab 1 unchanged, and its local repository is left as it is; encrypting it, moving it to a dedicated host and rehearsing restore are all Lab 3 |
 
 ## Data at rest
@@ -47,7 +49,7 @@ refused, not downgraded to.
 
 | # | Client | Server | Port | Server certificate | Client certificate |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Npgsql application | PostgreSQL | 5432 | `<node>-postgres` | none — SCRAM |
+| 1 | Npgsql application on `lab2-app1` | PostgreSQL | 5432 | `<node>-postgres` | none — SCRAM |
 | 2 | Standby streaming replication | Primary PostgreSQL | 5432 | `<node>-postgres` | none — SCRAM |
 | 3 | Patroni | PostgreSQL | 5432 | `<node>-postgres` | none — SCRAM |
 | 4 | Patroni | etcd client API | 2379 | `<node>-etcd` | **`<node>-dcs-client`** |
@@ -66,7 +68,17 @@ client side   SSL Mode=VerifyFull          -> an unverified server is refused
 ```
 
 Certificates carry both DNS and IP subject alternative names, because the client
-connects by address.
+connects by address. Under `VerifyFull` nothing but an `IP Address:` SAN can
+satisfy verification of an address.
+
+Protocol floors vary by what each component supports, which is worth stating
+rather than implying uniformity:
+
+| Channel | Floor | Why |
+| --- | --- | --- |
+| etcd client and peer | TLS 1.3 | `tls-min-version`; only Patroni and `etcdctl` talk to it |
+| PostgreSQL | TLS 1.3 | `ssl_min_protocol_version`, reachable only because the client is on Linux |
+| Patroni REST API | none | Patroni exposes `cafile`, `certfile`, `keyfile`, `ciphers` and `verify_client`, and no minimum-version setting |
 
 ## Acceptance criteria
 
@@ -84,14 +96,21 @@ mounted will initialise an empty data directory over the mountpoint.
 
 ## Topology
 
-Three VMs, as in Lab 1, each with two additional disks.
+Four VMs. Three cluster nodes as in Lab 1, plus a host for the application.
 
 | VM | Role | Additional disks |
 | --- | --- | --- |
 | `lab2-pg1/2/3` | PostgreSQL, Patroni, etcd | `pgdata` 10G, `etcd` 5G — each LUKS2 |
+| `lab2-app1` | The .NET client | none |
+
+The client runs in a VM rather than on the host for two reasons. It crosses the
+same network, firewall and `pg_hba` rules as any real client, so the failover
+tests prove something closer to production. And .NET on macOS uses Apple's TLS
+stack, which does not implement TLS 1.3 at all — while the client lived on the
+host, PostgreSQL could not be pinned above TLS 1.2.
 
 Lima disks are independent objects that outlive their instance, so teardown
-deletes them explicitly.
+deletes the VMs first and then the disks.
 
 ## Run
 
@@ -99,3 +118,34 @@ deletes them explicitly.
 make all      # build, then run every check and report
 make clean    # destroy the VMs, their disks, and all generated material
 ```
+
+From an empty machine:
+
+```
+==============================================================================
+ Lab 2 results
+==============================================================================
+ PASS  Create the three Lima VMs                                         3m18s
+ PASS  Install and configure the Patroni cluster                         1m59s
+ PASS  Cluster services, quorum, replication, pgBackRest                    4s
+ PASS  Encryption at rest: LUKS2 volumes, and a missing one stops the service      45s
+ PASS  PKI: certificates assert the right identities                        1s
+ PASS  Encryption in transit: every channel, plaintext refused              2s
+ PASS  Identity: verification fails closed on a wrong CA                    1s
+ PASS  Criterion 1: client connects to the primary and queries it           1s
+ PASS  Client guarantees: pool limit, timeouts, no blind retry             16s
+ PASS  Quorum commit: configured, blocking, and lossless                 1m00s
+ PASS  Criterion 2: failover after the primary VM is lost                  57s
+ PASS  Criterion 2: failover after PostgreSQL is killed                    12s
+ PASS  Split brain: softdog fences a frozen Patroni                        37s
+ PASS  Split brain: Patroni demotes itself without etcd                    57s
+------------------------------------------------------------------------------
+ 14 passed, 0 failed, total 10m11s
+==============================================================================
+```
+
+The four encryption checks sit above the Lab 1 ones deliberately: if the cluster
+is not encrypted there is little point asking whether it fails over correctly.
+Individual checks run on their own — `make test_at_rest`, `test_in_transit`,
+`test_identity`, `test_pki` — and `make check` runs everything without
+rebuilding.

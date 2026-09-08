@@ -5,6 +5,35 @@
   gather_facts: false
   strategy: free
   tasks:
+    # A first bootstrap that fails after creating its data directory poisons
+    # itself: initial-cluster-state is "new", so every Restart=on-failure retry
+    # then dies with "member has already been bootstrapped" and never recovers.
+    # Mutual peer TLS makes that first failure more likely, because the peer
+    # handshake can fail while the other nodes are still coming up.
+    #
+    # Clearing is only safe when nothing was ever bootstrapped. An empty
+    # PostgreSQL data directory is that discriminator: on a running cluster it
+    # is populated and this does nothing, so a re-run of configure_cluster
+    # cannot destroy a live etcd.
+    - name: Look for a half-initialised etcd data directory
+      ansible.builtin.shell: |
+        set -o pipefail
+        member="{{ lab2_etcd_data_dir }}/member"
+        pgdata="{{ lab2_postgres_data_dir }}"
+        if [ -d "$member" ] && [ ! -d "$member/wal" ] && [ -z "$(ls -A "$pgdata" 2>/dev/null)" ]; then
+          echo poisoned
+        fi
+      args:
+        executable: /bin/bash
+      register: lab2_etcd_state
+      changed_when: false
+
+    - name: Clear a half-initialised etcd data directory
+      ansible.builtin.file:
+        path: "{{ lab2_etcd_data_dir }}/member"
+        state: absent
+      when: "'poisoned' in lab2_etcd_state.stdout"
+
     - name: Enable and start etcd
       ansible.builtin.systemd:
         name: etcd
