@@ -225,7 +225,27 @@ are recorded because the reasoning matters more than the plan being right.
 | Three VMs | Four. The application host is the direct consequence of the row above, and it makes the failover tests cross the same network and rules as a real client |
 | `RequiresMountsFor=` alone would stop a service starting without its volume | It pulls the mount unit in, so systemd repairs the mount and starts normally. The guard is the `ExecStartPre` check, and the property worth asserting is that the service never runs on the wrong device, not that it refuses to start |
 
-Two bugs were found only by building from empty rather than iterating on a
+One race remains worth knowing about. etcd's first start can fail after
+creating its data directory but before writing a WAL; `initial-cluster-state`
+is `new`, so every `Restart=on-failure` retry then dies on "member has already
+been bootstrapped" and never recovers. Seen once in seven from-scratch builds.
+
+The root cause is not established. What was observed: a fresh etcd process
+created `member/`, opened its backend, and 33ms later declared itself already
+bootstrapped, with only `snap/` present and no `wal/`. Two theories were tested
+and discarded -- the RPM does not auto-start before the configuration is written
+(`UnitFilePreset: disabled`, and on a good build the config precedes the first
+start by three seconds), and a pre-start check cannot help because the
+corruption happens during the start. What follows is therefore recovery from an
+observed symptom, not a fix for an understood defect.
+
+`start-etcd.yml` repairs it *after* the start attempt rather than before, since
+the corruption happens during the start and a pre-check never sees it. Clearing
+is gated on the PostgreSQL data directory being empty, so a live cluster is
+never touched -- verified by injecting the exact corruption on a running node
+and confirming the play refuses to act and fails loudly instead.
+
+Two further bugs were found only by building from empty rather than iterating on a
 running cluster: `/etc/lab2` was created `0700` as a side effect of the LUKS key
 directory, so every service was denied its certificates with a "permission
 denied" that looked exactly like SELinux; and the Rocky image ships no `libicu`,

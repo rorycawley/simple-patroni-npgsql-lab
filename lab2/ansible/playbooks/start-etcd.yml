@@ -39,6 +39,72 @@
         name: etcd
         enabled: true
         state: started
+      register: lab2_etcd_start
+      failed_when: false
+
+    # The pre-check above only sees corruption left by an earlier run. The
+    # observed failure happened *during* this start: etcd created its data
+    # directory, failed before writing a WAL, and every Restart=on-failure retry
+    # then died on "already bootstrapped" with no way out. Recovery therefore
+    # has to run after the attempt, not only before it.
+    #
+    # Why the first start failed is not established -- this recovers from the
+    # symptom rather than fixing a known cause. Do not read the condition below
+    # as a diagnosis.
+    #
+    # Scope, stated precisely: this repairs a FIRST bootstrap, where all three
+    # members are forming a new cluster together. It deliberately cannot repair
+    # a single node rejoining an established etcd cluster -- that needs
+    # `etcdctl member add` and initial-cluster-state: existing, and silently
+    # wiping a member in that situation would be the wrong action. The empty
+    # PostgreSQL data directory is what distinguishes the two.
+    - name: Detect an etcd that poisoned its own data directory while starting
+      ansible.builtin.shell: |
+        set -o pipefail
+        member="{{ lab2_etcd_data_dir }}/member"
+        pgdata="{{ lab2_postgres_data_dir }}"
+        if systemctl is-active --quiet etcd; then exit 0; fi
+        journalctl -u etcd --no-pager -n 50 2>/dev/null | grep -q "has already been bootstrapped" || exit 0
+        # Only ever safe when nothing was bootstrapped: on a live cluster the
+        # PostgreSQL data directory is populated and this refuses to act.
+        [ -z "$(ls -A "$pgdata" 2>/dev/null)" ] || exit 0
+        [ ! -d "$member/wal" ] || exit 0
+        echo poisoned
+      args:
+        executable: /bin/bash
+      register: lab2_etcd_poisoned
+      changed_when: false
+
+    - name: Clear the poisoned data directory and let etcd bootstrap cleanly
+      when: "'poisoned' in lab2_etcd_poisoned.stdout"
+      block:
+        - name: Stop the failing etcd
+          ansible.builtin.systemd:
+            name: etcd
+            state: stopped
+
+        - name: Remove the half-initialised member directory
+          ansible.builtin.file:
+            path: "{{ lab2_etcd_data_dir }}/member"
+            state: absent
+
+        - name: Clear the failure counter so systemd will start it again
+          ansible.builtin.command: systemctl reset-failed etcd
+          changed_when: true
+
+        - name: Start etcd on a clean data directory
+          ansible.builtin.systemd:
+            name: etcd
+            state: started
+
+    - name: Assert etcd is running
+      ansible.builtin.systemd:
+        name: etcd
+        state: started
+      register: lab2_etcd_final
+      until: lab2_etcd_final is succeeded
+      retries: 5
+      delay: 5
 
 - name: Verify etcd quorum and all three endpoints
   hosts: lab2-pg1

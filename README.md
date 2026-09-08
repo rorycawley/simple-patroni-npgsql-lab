@@ -237,3 +237,18 @@ first alone would pass on a cluster that merely claims to be synchronous.
 The `blocking` tier is the decisive one. `SyncRep` is PostgreSQL's own name for a
 backend waiting on a synchronous standby, so that wait state cannot occur on an
 asynchronous cluster at all — no timing heuristic is involved.
+
+## Lab 2: encrypted at rest and in transit
+
+Everything Lab 1 proves, with the database and its cluster state unreadable to
+anyone holding the disks or watching the wire. LUKS2 volumes for PostgreSQL and
+etcd on separate devices, a private CA issuing per-purpose certificates, and TLS
+on every channel between components — each one checked to *refuse* plaintext
+rather than merely to accept TLS.
+
+The client moves into its own VM there, which is what allows PostgreSQL to pin a
+TLS 1.3 floor: .NET on macOS uses Apple's TLS stack, which does not implement
+1.3 at all.
+
+See the [Lab 2 guide](lab2/README.md). It runs the same way: `make all` to
+build and check, `make clean` to remove everything.
