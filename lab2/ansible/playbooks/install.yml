@@ -31,4 +31,8 @@
         lab2_host_gateway_ip: "{{ lab2_host_gateway_ip_override or (lab2_node_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
 
   roles:
+    # Before postgres_node: the package installs create /var/lib/pgsql and
+    # /var/lib/etcd, and anything written there before the mount would be
+    # hidden by it rather than stored on the volume.
+    - role: data_volumes
     - role: postgres_node

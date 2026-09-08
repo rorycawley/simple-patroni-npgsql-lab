@@ -4,6 +4,18 @@ lab2_patroni_namespace: /service/
 lab2_postgres_data_dir: /var/lib/pgsql/data
 lab2_postgres_bin_dir: /usr/pgsql-18/bin
 lab2_etcd_data_dir: /var/lib/etcd/lab2
+
+# Each service's data directory sits on its own block device. Sizes must stay
+# distinct from each other and from the root disk: the guest resolves which
+# device is which by size, because attachment order is not a contract.
+lab2_volume_fstype: xfs
+lab2_data_volumes:
+  - name: pgdata
+    path: /var/lib/pgsql
+    gib: 10
+  - name: etcd
+    path: /var/lib/etcd
+    gib: 5
 lab2_lima_management_cidr: 192.168.5.0/24
 
 # The macOS side of Lima's managed shared network. It is the only non-cluster

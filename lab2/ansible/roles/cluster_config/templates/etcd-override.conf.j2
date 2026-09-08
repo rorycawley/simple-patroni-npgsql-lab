@@ -1,3 +1,7 @@
+[Unit]
+# Refuse to start without the data volume; see percona-patroni.service.
+RequiresMountsFor={{ lab2_etcd_data_dir }}
+
 [Service]
 ExecStart=
 ExecStart=/usr/bin/etcd --config-file=/etc/etcd/etcd.conf.yaml

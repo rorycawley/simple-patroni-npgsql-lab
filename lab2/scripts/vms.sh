@@ -7,6 +7,11 @@ readonly VM_HOSTNAMES=(pg1.lab2.example pg2.lab2.example pg3.lab2.example)
 readonly VM_CPUS="${VM_CPUS:-2}"
 readonly VM_MEMORY_GIB="${VM_MEMORY_GIB:-4}"
 readonly VM_DISK_GIB="${VM_DISK_GIB:-20}"
+# Data volumes, one per service. The sizes must differ from each other and from
+# the root disk: the guest identifies which device is which by size, because
+# attachment order is not a contract.
+readonly VM_PGDATA_GIB="${VM_PGDATA_GIB:-10}"
+readonly VM_ETCD_GIB="${VM_ETCD_GIB:-5}"
 readonly LIMA_TEMPLATE="${LIMA_TEMPLATE:-$SCRIPT_DIR/../rocky-9.8.yaml}"
 readonly LIMA_NETWORK="${LIMA_NETWORK:-lima:shared}"
 readonly ENV_FILE="$SCRIPT_DIR/../.env"
@@ -46,6 +51,26 @@ require_network() {
 
 instance_exists() {
   limactl list --quiet | grep -Fxq "$1"
+}
+
+disk_exists() {
+  limactl disk ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -Fxq "$1"
+}
+
+# Lima disks are independent objects, so they are created before the instance
+# that references them and deleted after it is gone.
+ensure_disk() {
+  local name="$1" gib="$2"
+  if disk_exists "$name"; then
+    echo "Disk already exists: $name"
+  else
+    echo "Creating disk: $name (${gib}GiB)"
+    limactl disk create "$name" --size "${gib}GiB" >/dev/null
+  fi
+}
+
+data_disks_for() {
+  printf '%s-pgdata %s-etcd\n' "$1" "$1"
 }
 
 vm_ip() {
@@ -148,9 +173,13 @@ create() {
       echo "Starting existing VM: $vm_name"
     else
       echo "Creating VM: $vm_name"
+      ensure_disk "${vm_name}-pgdata" "$VM_PGDATA_GIB"
+      ensure_disk "${vm_name}-etcd" "$VM_ETCD_GIB"
       limactl create --tty=false --name="$vm_name" \
         --cpus="$VM_CPUS" --memory="$VM_MEMORY_GIB" --disk="$VM_DISK_GIB" \
-        --mount-none --network="$LIMA_NETWORK" "$LIMA_TEMPLATE"
+        --mount-none --network="$LIMA_NETWORK" \
+        --set ".additionalDisks = [{\"name\":\"${vm_name}-pgdata\"},{\"name\":\"${vm_name}-etcd\"}]" \
+        "$LIMA_TEMPLATE"
     fi
     limactl start --tty=false "$vm_name"
   done
@@ -166,6 +195,25 @@ destroy() {
     else
       echo "VM does not exist, skipping: $vm_name"
     fi
+  done
+
+  # Only now: Lima refuses to delete a disk that is attached to an instance.
+  local disk_name
+  for vm_name in "${VM_NAMES[@]}"; do
+    for disk_name in $(data_disks_for "$vm_name"); do
+      if disk_exists "$disk_name"; then
+        echo "Deleting data disk: $disk_name"
+        limactl disk delete "$disk_name" >/dev/null
+      fi
+    done
+  done
+  for vm_name in "${VM_NAMES[@]}"; do
+    for disk_name in $(data_disks_for "$vm_name"); do
+      if disk_exists "$disk_name"; then
+        echo "Data disk still present after teardown: $disk_name" >&2
+        return 1
+      fi
+    done
   done
   rm -f "$ENV_FILE"
 }

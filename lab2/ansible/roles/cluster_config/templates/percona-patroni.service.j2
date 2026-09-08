@@ -2,6 +2,10 @@
 Description=Patroni-managed Percona PostgreSQL HA node
 After=network-online.target etcd.service
 Wants=network-online.target
+# Refuse to start without the data volume. Without this, a failed mount would
+# leave Patroni to initialise an empty data directory over the mountpoint and
+# report a healthy cluster holding none of the data.
+RequiresMountsFor={{ lab2_postgres_data_dir }}
 
 [Service]
 Type=simple
