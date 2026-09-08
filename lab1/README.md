@@ -21,25 +21,26 @@ then runs every check and prints one summary:
 ==============================================================================
  Lab 1 results
 ==============================================================================
- PASS  Create the three Lima VMs                                            1s
- PASS  Install and configure the Patroni cluster                           20s
- PASS  Cluster services, quorum, replication, pgBackRest                    4s
+ PASS  Create the three Lima VMs                                         3m30s
+ PASS  Install and configure the Patroni cluster                         6m43s
+ PASS  Cluster services, quorum, replication, pgBackRest                    6s
  PASS  Criterion 1: client connects to the primary and queries it           1s
- PASS  Client guarantees: pool limit, timeouts, no blind retry             19s
- PASS  Quorum commit: configured, blocking, and lossless                   53s
- PASS  Criterion 2: failover after the primary VM is lost                1m00s
+ PASS  Client guarantees: pool limit, timeouts, no blind retry             18s
+ PASS  Quorum commit: configured, blocking, and lossless                   47s
+ PASS  Criterion 2: failover after the primary VM is lost                  57s
  PASS  Criterion 2: failover after PostgreSQL is killed                    14s
- PASS  Split brain: softdog fences a frozen Patroni                        35s
+ PASS  Split brain: softdog fences a frozen Patroni                        42s
  PASS  Split brain: Patroni demotes itself without etcd                    47s
 ------------------------------------------------------------------------------
- 10 passed, 0 failed, total 4m14s
+ 10 passed, 0 failed, total 14m06s
 ==============================================================================
 ```
 
-Those timings are from a rerun, where the VMs already existed and every package
-was already installed. A first run downloads the Rocky image and installs
-PostgreSQL, Patroni, etcd, and pgBackRest on three nodes, so budget considerably
-longer for it.
+That is a first run on a machine with nothing cached: it downloads the Rocky
+image and installs PostgreSQL, Patroni, etcd, and pgBackRest on all three nodes.
+Rerunning `make all` against existing VMs takes about four minutes, because VM
+creation and package installation both become no-ops — the two setup phases drop
+to seconds, while the checks below them take the same time either way.
 
 The setup phases stop the run if they fail, since there is nothing to test. The
 checks all run even after one fails, so a single invocation reports everything
