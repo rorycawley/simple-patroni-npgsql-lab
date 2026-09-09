@@ -18,6 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
+| [`lab6/README.md`](lab6/README.md) | Lab 6's design and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 
 ## The labs
@@ -29,7 +30,8 @@ Each file below owns one subject and does not repeat another's.
 | 3 — not started | Durable backups: a pgBackRest repository on MinIO, off the database hosts, encrypted and reached over TLS | — | — | — |
 | 4 — not started | Recovery: restoring from a Lab 3 backup, including to a point in time, and proving the restored cluster holds the right data | — | — | — |
 | 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
-| 6 — not started | Recovering from a bad migration: back up before migrating, then restore to the moment before it ran | — | — | — |
+| [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
+| 7 — not started | Recovering from a bad migration: back up before migrating, then restore to the moment before it ran | — | — | — |
 
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
 network. Lab 2 removes that constraint.
@@ -53,18 +55,33 @@ is Lab 1's uncertain-commit problem in a more damaging place: an interrupted
 migration that actually succeeded must not be recorded as failed, and must not
 be reapplied on the next run.
 
-Lab 6 is the case every earlier lab is blind to. A bad migration is not a fault:
-nothing crashes, no node is lost, and the cluster stays perfectly healthy while
-doing the wrong thing. Worse, the machinery from Labs 1 and 2 works *against*
-recovery here — quorum commit makes the bad migration durable before it is
-acknowledged, replication carries it to both standbys in milliseconds, and
-failover just hands over a healthy node carrying the same broken schema. There
-is no node left holding the old one. The only way back is the backup taken
-before the migration ran, restored to the moment before it started, which is why
-this lab composes Labs 3, 4 and 5 rather than repeating them.
+[Lab 6](lab6/README.md) then asks whether the migration needed a maintenance
+window at all. The answer under test is no — provided the schema stays compatible
+with both the current and previous application version, and every migration
+bounds its own lock wait. Compatibility is what makes an application rollback
+possible; taking downtime instead narrows the broken period but *forbids*
+rollback, because the old version can no longer run. The lock bound is what stops
+a 10ms `ALTER TABLE` becoming a five-minute outage when it queues behind a long
+transaction and everything else queues behind it. It is the only lab specified in
+detail before being built, because the design is the deliverable — the pipeline
+itself is simulated by a script.
+
+Labs 5 and 6 divide cleanly: 5 is the infrastructure interrupting your migration,
+6 is your migration interrupting your users.
+
+Lab 7 is the capstone, and the case every earlier lab is blind to. A bad
+migration is not a fault: nothing crashes, no node is lost, and the cluster stays
+perfectly healthy while doing the wrong thing. Worse, the machinery from Labs 1
+and 2 works *against* recovery — quorum commit makes the bad migration durable
+before it is acknowledged, replication carries it to both standbys in
+milliseconds, and failover just hands over a healthy node carrying the same
+broken schema. No node is left holding the old one. The only way back is the
+backup taken before the migration ran, restored to the moment before it started,
+which is why it comes last: it composes Labs 3, 4, 5 and 6 rather than repeating
+them.
 
 It also has a cost worth stating rather than discovering: rewinding to just
-before the migration discards every transaction committed after it. Lab 6 has to
+before the migration discards every transaction committed after it. Lab 7 has to
 measure that window, not just prove the schema came back.
 
 Lab 2 is a standalone copy of Lab 1, not a layer on top of it. The duplication is
