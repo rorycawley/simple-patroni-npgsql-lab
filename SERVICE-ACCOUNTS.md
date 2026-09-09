@@ -1,0 +1,165 @@
+# Service accounts and secrets
+
+Every identity the cluster needs, what it may do, and which lab introduces it.
+Intended for storage in OpenBao.
+
+Two things commonly listed here are **not** accounts:
+
+| Not an account | What it actually is |
+| --- | --- |
+| `softdog` | A kernel module reached through `/dev/watchdog`. The control is device ownership — Patroni's process must hold it, and `watchdog.mode: required` already refuses to be primary otherwise. Nothing to store |
+| `pg_dump` | A client tool, not a service. It does need a role to run as, which is `dumper` below — worth defining, because the usual alternative is running it as superuser |
+
+The OS users `postgres` and `etcd` are also out of scope: system accounts with no
+login and no stored password.
+
+## PostgreSQL roles
+
+| Role | Introduced by | Purpose | Superuser |
+| --- | --- | --- | --- |
+| `postgres` | Lab 1 | Patroni bootstrap and administration | yes |
+| `replicator` | Lab 1 | Streaming replication | no |
+| `rewind` | Lab 1 | `pg_rewind` when a demoted primary rejoins | no |
+| `app_runtime` | Lab 1 | The .NET client | no |
+| `migrator` | Lab 6 | Flyway schema migrations | no |
+| `pgbackrest` | Lab 3 | Backups | no |
+| `dumper` | any | Logical dumps | no |
+| `monitoring` | Lab 8 | `postgres_exporter` | no |
+| `operator` | any | Break-glass intervention | yes |
+
+### The separation that matters most
+
+`app_runtime` and `migrator` must be different roles. The application must not be
+able to alter schema, and the migration tool must not be the application — that
+is what makes a migration a reviewable, separately-authorised event rather than
+something any application bug can trigger.
+
+It has a consequence that catches people out: **`migrator` owns the tables it
+creates**, so `app_runtime` gets no access to anything Flyway creates later
+unless default privileges are set against `migrator`, not against whoever ran the
+`GRANT`.
+
+```sql
+-- Roles
+CREATE ROLE migrator     WITH LOGIN PASSWORD :'migrator_pw';
+CREATE ROLE app_runtime  WITH LOGIN PASSWORD :'app_pw';
+
+GRANT CONNECT ON DATABASE appdb TO migrator, app_runtime;
+ALTER SCHEMA public OWNER TO migrator;
+GRANT USAGE ON SCHEMA public TO app_runtime;
+
+-- Existing objects
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES    IN SCHEMA public TO app_runtime;
+GRANT USAGE, SELECT                  ON ALL SEQUENCES IN SCHEMA public TO app_runtime;
+
+-- Future objects created BY migrator. Without this, every table Flyway adds is
+-- invisible to the application until someone re-runs the GRANT by hand.
+ALTER DEFAULT PRIVILEGES FOR ROLE migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE migrator IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO app_runtime;
+```
+
+### Replication and rewind
+
+```sql
+CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD :'repl_pw';
+-- No database privileges: replication is not a database connection.
+```
+
+Patroni has a dedicated `authentication.rewind` slot and does not need a
+superuser for it on PostgreSQL 11 and later. The labs currently fall back to the
+superuser here, which is worth closing:
+
+```sql
+CREATE ROLE rewind WITH LOGIN PASSWORD :'rewind_pw';
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_ls_dir(text, boolean, boolean)                    TO rewind;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_stat_file(text, boolean)                          TO rewind;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text)                            TO rewind;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text, bigint, bigint, boolean)   TO rewind;
+```
+
+### Read-only roles
+
+```sql
+CREATE ROLE dumper WITH LOGIN PASSWORD :'dumper_pw';
+GRANT CONNECT ON DATABASE appdb TO dumper;
+-- pg_read_all_data (PostgreSQL 14+) is the reliable choice: a dump by a role
+-- that merely holds SELECT on today's tables silently omits anything it cannot
+-- read, producing a backup that restores cleanly and is incomplete.
+GRANT pg_read_all_data TO dumper;
+
+CREATE ROLE monitoring WITH LOGIN PASSWORD :'monitoring_pw';
+GRANT CONNECT ON DATABASE appdb TO monitoring;
+GRANT pg_monitor TO monitoring;   -- covers read_all_settings, read_all_stats, stat_scan_tables
+```
+
+### pgBackRest
+
+pgBackRest does **not** need a superuser on PostgreSQL 11+. It needs to read
+settings and to call the backup control functions:
+
+```sql
+CREATE ROLE pgbackrest WITH LOGIN PASSWORD :'pgbackrest_pw';
+GRANT pg_read_all_settings TO pgbackrest;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_start(text, boolean) TO pgbackrest;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_stop(boolean)        TO pgbackrest;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_switch_wal()                TO pgbackrest;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text)  TO pgbackrest;
+```
+
+> Verify the exact signatures against the pgBackRest guide for PostgreSQL 18
+> before applying. `pg_start_backup`/`pg_stop_backup` were renamed to
+> `pg_backup_start`/`pg_backup_stop` in PostgreSQL 15, and the argument lists
+> differ between versions.
+
+## Infrastructure secrets
+
+| Secret | Introduced by | Notes |
+| --- | --- | --- |
+| Patroni REST API credentials | Lab 1 | Guards the *unsafe* endpoints — restart, reinitialize, switchover. Worth having even alongside mTLS: holding a valid certificate should not by itself authorise a switchover |
+| etcd RBAC user | Lab 2 (optional) | mTLS authenticates the caller; it does not restrict which keys that caller may touch. Only needed if you want authorisation as well as identity |
+| CA private key | Lab 2 | The most sensitive key here. Never copied to a guest — Lab 2 asserts this and fails the run if a guest holds it |
+| Per-node TLS keys (`postgres`, `etcd`, `patroni`, `dcs-client`) | Lab 2 | Better *issued* by OpenBao's PKI engine than stored as static secrets |
+| LUKS volume keys | Lab 2 | See the boot-dependency warning below |
+| MinIO access key and secret | Lab 3 | Repository access |
+| **pgBackRest `repo1-cipher-pass`** | Lab 3 | See below |
+| Grafana admin, Alloy → Loki/Mimir credentials | Lab 8 | |
+
+## Three risks worth stating
+
+### The repository cipher passphrase protects everything else
+
+Lose `repo1-cipher-pass` and every backup is unreadable — including the ones you
+would use to recover from having lost it. It must be stored with **no dependency
+on the cluster it protects**, and OpenBao's own recovery path must not route
+through those backups. This is the one secret where a circular dependency is
+fatal rather than inconvenient.
+
+### Not everything can be dynamic
+
+OpenBao's database secrets engine suits `app_runtime`, `dumper` and `monitoring`
+well — short-lived, rotated freely, no coordination needed.
+
+It does not suit `postgres` or `replicator`. Patroni holds both in `patroni.yml`
+and in the DCS; rotating them means updating the distributed configuration and
+restarting replicas, so they are static-with-managed-rotation rather than
+dynamic. Treating them as dynamic breaks replication at a moment of its
+choosing.
+
+### LUKS keys in OpenBao move the risk rather than removing it
+
+Today's root-only keyfile means a stolen **disk** is safe but a stolen **node**
+is not. Fetching the key from OpenBao at boot closes that, and introduces a
+chicken-and-egg: the node needs network, time and an authenticated identity
+before it can mount its data volume, and OpenBao may itself be unavailable. This
+is the same trade Tang/Clevis makes, and [Lab 2](lab2/README.md) scoped it out
+deliberately. Worth a decision, not a default.
+
+## Break-glass
+
+`operator` is a superuser, separate from `postgres`, audited, and expected to go
+unused. It exists because [strict synchronous mode](SLA.md#the-exception-being-closed)
+created a state that does not resolve itself: with both standbys gone, writes
+block until someone intervenes. That intervention should be a named, logged
+identity rather than whichever superuser credential was closest to hand.

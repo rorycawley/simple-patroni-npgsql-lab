@@ -94,6 +94,12 @@ different route — there by failover, here by an aborted pipeline.
 
 ## Notes specific to this cluster
 
+- **Flyway runs as `migrator`, not as the application.** The application must not
+  be able to alter schema, and the migration tool must not be the application.
+  That separation has a consequence worth knowing before it bites: `migrator`
+  owns the tables it creates, so the application sees nothing Flyway adds unless
+  default privileges were set against `migrator`. See
+  [`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md).
 - **Flyway must reach the primary**, exactly as the application does. Against a
   replica it fails read-only — noisy but safe.
 - **Quorum commit taxes backfills.** Every batch commit waits for a standby

@@ -18,8 +18,9 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| [`lab6/README.md`](lab6/README.md) | Lab 6's design and acceptance criteria — specified ahead of being built |
+| [`lab6/README.md`](lab6/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
+| [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 
 ## The labs
 
@@ -32,6 +33,7 @@ Each file below owns one subject and does not repeat another's.
 | 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
 | [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
 | 7 — not started | Recovering from a bad migration: back up before migrating, then restore to the moment before it ran | — | — | — |
+| [8](lab8/README.md) — specified, not built | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | — | — | — |
 
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
 network. Lab 2 removes that constraint.
@@ -83,6 +85,16 @@ them.
 It also has a cost worth stating rather than discovering: rewinding to just
 before the migration discards every transaction committed after it. Lab 7 has to
 measure that window, not just prove the schema came back.
+
+[Lab 8](lab8/README.md) is monitoring, and it is the easiest lab here to fake —
+a green dashboard proves a dashboard renders, and a broken alerting pipeline
+looks exactly like a quiet night. What makes it testable is that the earlier
+labs can already break things on purpose, so the criterion becomes: every fault
+they inject must raise its own alert within a measured time, and a healthy
+cluster must raise none. It matters most for the two failures that do **not**
+heal themselves — writes blocked on synchronous replication, and backups that
+have quietly stopped — because neither raises an error and both are otherwise
+found only when it is too late.
 
 Lab 2 is a standalone copy of Lab 1, not a layer on top of it. The duplication is
 intentional: either lab can be built, broken and destroyed without touching the

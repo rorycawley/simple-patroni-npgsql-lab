@@ -45,6 +45,10 @@ Every location cluster data comes to rest, and what protects it:
 | Server private keys | `/etc/lab2/pki` on each node | `0600`, owned by the service user |
 | CA private key | `.secrets/pki/` on the control machine | Never copied to a guest; the directory is not tracked |
 
+The private keys and the CA are catalogued with every other identity in
+[`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md), including which of them are
+better issued by a secrets manager than stored.
+
 Separate devices are not only about encryption. etcd is fsync-latency sensitive:
 sharing a device with PostgreSQL lets its Raft commits queue behind checkpoint
 and WAL I/O, which expires the leader lease and causes failover on a healthy

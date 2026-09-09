@@ -51,6 +51,10 @@ While no host is an eligible primary, the client retries the connection against 
 a rejected password or a missing database fails immediately rather than being
 reattempted, and a write is never reissued.
 
+Lab 1 introduces the `postgres`, `replicator` and `app_runtime` roles; their
+privileges and the rest of the cluster's identities are in
+[`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md).
+
 The client reads the three addresses from `LAB1_PG_HOSTS`, which
 `scripts/test-npgsql.sh` fills from the shared-network IP addresses that
 `make create_vms` writes into `lab1/.env`.
