@@ -18,6 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
+| [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 
 ## The labs
 
@@ -25,10 +26,46 @@ Each file below owns one subject and does not repeat another's.
 | --- | --- | --- | --- | --- |
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | plaintext | plaintext | 3 |
 | [2](lab2/README.md) | Everything Lab 1 proves, on encrypted disks and an encrypted network | LUKS2, separate volumes for PostgreSQL and etcd | TLS on every channel, mutual where the peer is a machine | 4 |
-| 3 — not started | Backups to MinIO, pgBackRest over TLS, a rehearsed restore | — | — | — |
+| 3 — not started | Durable backups: a pgBackRest repository on MinIO, off the database hosts, encrypted and reached over TLS | — | — | — |
+| 4 — not started | Recovery: restoring from a Lab 3 backup, including to a point in time, and proving the restored cluster holds the right data | — | — | — |
+| 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
+| 6 — not started | Recovering from a bad migration: back up before migrating, then restore to the moment before it ran | — | — | — |
 
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
 network. Lab 2 removes that constraint.
+
+Backup and recovery are deliberately two labs rather than one. Lab 3 can finish
+green while proving nothing about recovery: a repository that accepts writes,
+passes `pgbackrest check` and reports a valid backup set is still only evidence
+that *taking* a backup works. Lab 4 is where that evidence is tested — restore a
+cluster from the repository, bring it back to a chosen point in time, and assert
+the data is the data that was committed. A backup nobody has restored is an
+assumption, and separating the labs keeps it from being mistaken for a result.
+
+Lab 5 asks what a schema migration does when the primary moves underneath it. A
+migration is a write, so Flyway has to find the primary exactly as the
+application does, and PostgreSQL's transactional DDL means a single migration
+either applies or it does not. The risk is not the DDL — it is the bookkeeping
+around it. Flyway records each migration in a history table and holds a lock
+while it runs, so a failover mid-migration can leave that history disagreeing
+with the schema, or leave the lock held so every later deployment blocks. This
+is Lab 1's uncertain-commit problem in a more damaging place: an interrupted
+migration that actually succeeded must not be recorded as failed, and must not
+be reapplied on the next run.
+
+Lab 6 is the case every earlier lab is blind to. A bad migration is not a fault:
+nothing crashes, no node is lost, and the cluster stays perfectly healthy while
+doing the wrong thing. Worse, the machinery from Labs 1 and 2 works *against*
+recovery here — quorum commit makes the bad migration durable before it is
+acknowledged, replication carries it to both standbys in milliseconds, and
+failover just hands over a healthy node carrying the same broken schema. There
+is no node left holding the old one. The only way back is the backup taken
+before the migration ran, restored to the moment before it started, which is why
+this lab composes Labs 3, 4 and 5 rather than repeating them.
+
+It also has a cost worth stating rather than discovering: rewinding to just
+before the migration discards every transaction committed after it. Lab 6 has to
+measure that window, not just prove the schema came back.
 
 Lab 2 is a standalone copy of Lab 1, not a layer on top of it. The duplication is
 intentional: either lab can be built, broken and destroyed without touching the

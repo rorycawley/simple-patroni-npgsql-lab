@@ -28,7 +28,7 @@ to anyone on the wire between components.
 | A private CA issuing per-purpose certificates at build time | Public PKI, certificate rotation, revocation, OCSP |
 | TLS on every channel below, mutual where the peer is a machine | Client authentication by certificate for the application (SCRAM inside TLS) |
 | The application on its own VM, so it crosses the network like a real client | Hardening the application as a service; it is invoked per test, not long-running |
-| — | Backups. pgBackRest is carried over from Lab 1 unchanged, and its local repository is left as it is; encrypting it, moving it to a dedicated host and rehearsing restore are all Lab 3 |
+| — | Backups. pgBackRest is carried over from Lab 1 unchanged, and its local repository is left as it is; encrypting it and moving it off the database hosts are Lab 3, and restoring from it is Lab 4 |
 
 Everything Lab 1 asserts about failover, fencing, quorum commit and the client's
 configured limits is inherited unchanged and re-run here. It is documented in the
