@@ -213,6 +213,12 @@ Lab 3 then has both halves of the backup story: TLS in transit to the object
 store, and `repo1-cipher-type=aes-256-cbc` for the repository at rest, which is
 the gap left open when backups were scoped out of Lab 2.
 
+Restoring from that repository is **Lab 4**, deliberately not Lab 3. Lab 3 can
+go green on evidence that taking a backup works — a repository that accepts
+writes, a passing `pgbackrest check`, a valid backup set — none of which is
+evidence that the backup can be restored. Keeping recovery in its own lab stops
+the first from being read as the second.
+
 ## What the build changed
 
 Each phase landed, but four things turned out differently from the plan. They
@@ -225,25 +231,143 @@ are recorded because the reasoning matters more than the plan being right.
 | Three VMs | Four. The application host is the direct consequence of the row above, and it makes the failover tests cross the same network and rules as a real client |
 | `RequiresMountsFor=` alone would stop a service starting without its volume | It pulls the mount unit in, so systemd repairs the mount and starts normally. The guard is the `ExecStartPre` check, and the property worth asserting is that the service never runs on the wrong device, not that it refuses to start |
 
-One race remains worth knowing about. etcd's first start can fail after
-creating its data directory but before writing a WAL; `initial-cluster-state`
-is `new`, so every `Restart=on-failure` retry then dies on "member has already
-been bootstrapped" and never recovers. Seen once in seven from-scratch builds.
+### The etcd first-bootstrap race
 
-The root cause is not established. What was observed: a fresh etcd process
-created `member/`, opened its backend, and 33ms later declared itself already
-bootstrapped, with only `snap/` present and no `wal/`. Two theories were tested
-and discarded -- the RPM does not auto-start before the configuration is written
-(`UnitFilePreset: disabled`, and on a good build the config precedes the first
-start by three seconds), and a pre-start check cannot help because the
-corruption happens during the start. What follows is therefore recovery from an
-observed symptom, not a fix for an understood defect.
+etcd's first start could fail and never recover, leaving every retry dying on
+`member <id> has already been bootstrapped`. Seen once in seven from-scratch
+builds.
 
-`start-etcd.yml` repairs it *after* the start attempt rather than before, since
-the corruption happens during the start and a pre-check never sees it. Clearing
-is gated on the PostgreSQL data directory being empty, so a live cluster is
-never touched -- verified by injecting the exact corruption on a running node
-and confirming the play refuses to act and fails loudly instead.
+An earlier version of this document blamed a half-initialised local data
+directory and recovered by deleting it. **That was wrong, and the recovery
+could not have worked.** The error comes from etcd's `isMemberBootstrapped`,
+which asks the *remote peers* whether this member is already known. It is not a
+check on local disk, so deleting this node's `member/` directory cannot change
+the answer the peers give. The repair was aimed at the wrong subject, which is
+why it was never once observed to fix a real occurrence.
+
+Re-reading Percona's etcd guidance and the sibling lab
+(`../percona-patroni-npgsql-lab`) against ours found three real differences:
+
+| | Percona / sibling | Lab 2 before |
+| --- | --- | --- |
+| Start order | "Try starting all nodes again **at the same time**"; the sibling starts all three in parallel | `strategy: free`, which removes the barrier and lets the three starts drift apart |
+| Data directory | The sibling wipes it before every start | Never cleared before the start |
+| Retry budget | The sibling retries once, host-orchestrated, after a 3s pause | Left to `Restart=on-failure` with systemd's 100ms default and `StartLimitBurst=5` -- the entire budget spent in half a second, long before three VMs can complete a peer handshake |
+
+`strategy: free` is a real defect: Percona is explicit that a first start may
+fail on a quorum timeout and that simultaneity is the remedy, and the free
+strategy guaranteed the opposite. Calling it *the* cause would be a claim the
+evidence does not support — see the teardown bug below, which is established and
+was found only by running the builds. Four changes followed:
+
+1. `strategy: free` removed, so all three nodes reach the start task together.
+2. `RestartSec=5` with a bounded `StartLimitBurst=12` over 120s, so a first
+   failure is survivable instead of terminal — still bounded, so a genuinely
+   broken node surfaces as a failed unit rather than restarting for ever.
+3. The member directory is cleared *before* a first bootstrap, as the sibling
+   does, so `initial-cluster-state: new` is true when we assert it.
+4. Recovery re-forms **all three** members from empty simultaneously, rather
+   than trying to repair one node. Since the survivors are what report the
+   wedged node as already bootstrapped, repairing it alone is not possible.
+
+Every destructive branch is gated on one discriminator: no node holds a
+PostgreSQL data directory. Patroni's state in etcd is meaningless until
+PostgreSQL is initialised, so when that holds there is nothing in etcd worth
+preserving. Verified against a live cluster before the code could run
+destructively — the play reported *"Existing cluster: etcd data will not be
+touched"*, `changed=0`, with all seven destructive tasks skipped.
+
+### The recovery, finally exercised
+
+The previous recovery was never once observed repairing a real occurrence, and
+an earlier attempt at a positive control was invalid because it staged a state
+that cannot arise here. Both are now resolved.
+
+The reason the earlier attempt failed is worth keeping. `isMemberBootstrapped`
+asks the peers, and a peer reports a member as bootstrapped only once that member
+has **published its client URLs** — which requires it to have started
+successfully at least once. Starting a fresh node beside a running cluster
+therefore does *not* reproduce the error. The member must first join and publish,
+then lose its member directory.
+
+Staged exactly that — all three formed and publishing, then `pg1` stopped, its
+member directory removed, and restarted with `initial-cluster-state: new`:
+
+```text
+members with published URLs: 3
+pg1 etcd state: activating
+'has already been bootstrapped' occurrences: 3
+WEDGE REPRODUCED
+recovery branch FIRED
+PASS: etcd recovered and quorum is healthy
+```
+
+The wedge is reproduced first and the run aborts if it is not, so a green result
+cannot come from a cluster that was never broken. The recovery then re-formed all
+three members and quorum returned.
+
+Both controls now hold: the recovery fires and repairs a genuine reproduction of
+the failure, and refuses to act on a live cluster.
+
+That flag is deliberately a string comparison rather than a boolean. `set_fact`
+does not dependably coerce templated booleans, and the failure is asymmetric: a
+mis-typed comparison would count zero initialised nodes, make first-bootstrap
+come out true on a live cluster, and wipe its etcd.
+
+### A teardown bug that made "from scratch" untrue
+
+Running seven consecutive from-scratch builds to measure the rate found a
+separate and more consequential defect. Build 7 failed, and `make clean` was the
+cause:
+
+```text
+cannot delete disk `lab2-pg3-pgdata` in use by instance `lab2-pg3`
+make: *** [clean] Error 1
+```
+
+`limactl delete --force` returns before Lima has released its reference to the
+instance's disks, so the immediately following `disk delete` can still fail.
+Lima disks outlive their instance, so the disk survived, the next `make all`
+reattached it, and the "fresh" build came up holding the **previous run's
+PostgreSQL and etcd data**. Confirmed directly: on that build `pg3` had 34
+entries in its data directory before Patroni had ever run, while `pg1` and `pg2`
+were empty.
+
+Two things made this invisible:
+
+- The teardown already had a check for surviving disks, but `set -e` aborted the
+  script on the first failed delete, before that check could report. The
+  deletion is now non-fatal so the explicit check is what speaks.
+- `make clean` failing was not obviously fatal to the *next* build, because the
+  next build appeared to succeed at creating VMs.
+
+Fixed by retrying the delete and calling `limactl disk unlock` between attempts
+to clear the stale reference, then letting the existing check fail loudly if
+anything survives. Verified against the exact stale state: six disks, four
+running VMs, all deleted, exit 0.
+
+This is also why only Lab 2 ever showed the problem. Lab 1 attaches no
+independent Lima disks — its storage is the instance's own disk, which is
+deleted with the instance — so it has no equivalent exposure.
+
+**What this does and does not explain.** The teardown bug is established, with
+logs. It is *not* established that it caused the original one-in-seven failure,
+and the signatures differ: build 7 failed with an unformable cluster and
+`connection refused`, never once logging "already been bootstrapped", whereas
+the original did log exactly that. They are two distinct faults. Both are now
+fixed; only one of them is fully understood.
+
+**Result after the fixes.** Seven further from-scratch builds: six green, one
+failure, and that failure was the softdog fencing check rather than anything in
+this area — the fence worked (boot id changed) but no leader was elected inside
+the 90s budget. Across both loops that check has failed once in ten. Zero
+teardown failures and zero occurrences of "already been bootstrapped" in any of
+the seven.
+
+Seven clean bootstraps do not prove a one-in-seven race is gone; they are
+consistent with it being gone and would also be consistent with bad luck. The
+evidence that carries weight is the reproduction above, where the failure is
+staged deliberately and the recovery is watched repairing it.
 
 Two further bugs were found only by building from empty rather than iterating on a
 running cluster: `/etc/lab2` was created `0700` as a side effect of the LUKS key

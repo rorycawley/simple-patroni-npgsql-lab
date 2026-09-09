@@ -1,15 +1,175 @@
 ---
+# Forming the etcd cluster.
+#
+# etcd's static bootstrap is only correct when every member starts from an empty
+# data directory at roughly the same time. Percona's guidance says so directly:
+# a first start may fail on a quorum timeout, and the remedy is to "try starting
+# all nodes again at the same time".
+#
+# Getting that wrong produces one specific, unrecoverable failure. With
+# initial-cluster-state "new" and no local WAL, etcd asks its PEERS whether this
+# member is already known, and refuses to bootstrap if they say yes:
+#
+#     member <id> has already been bootstrapped
+#
+# The check is `isMemberBootstrapped`, and it is answered by the other nodes,
+# not by local disk -- so deleting this node's member directory cannot clear the
+# condition. What clears it is a genuinely simultaneous restart of all three
+# members from empty, which is only safe at a first bootstrap.
+#
+# This mirrors lab2/ansible/playbooks/start-etcd.yml, where the failure was
+# actually observed. Lab 1 has the same static bootstrap and had the same
+# `strategy: free`, so it carried the same exposure.
+
+- name: Establish whether this is a first bootstrap
+  hosts: patroni_nodes
+  become: true
+  gather_facts: false
+  # Deliberately the default linear strategy: the fact below is derived from
+  # every node's hostvars, so all nodes must complete each task before the next.
+  tasks:
+    - name: Check whether this node's PostgreSQL data directory is empty
+      ansible.builtin.shell: |
+        set -o pipefail
+        if [ -z "$(ls -A '{{ lab1_postgres_data_dir }}' 2>/dev/null)" ]; then
+          echo empty
+        else
+          echo populated
+        fi
+      args:
+        executable: /bin/bash
+      register: lab1_pgdata_state
+      changed_when: false
+
+    # Kept as the literal string 'empty' or 'populated' rather than a boolean.
+    # set_fact's coercion of templated booleans is not dependable, and the
+    # failure mode is asymmetric: if these compared unequal to a real `false`,
+    # the count below would be zero, first-bootstrap would come out true on a
+    # LIVE cluster, and the recovery branch would wipe its etcd.
+    - name: Record whether this node holds a PostgreSQL cluster
+      ansible.builtin.set_fact:
+        lab1_pgdata_state_word: "{{ lab1_pgdata_state.stdout | trim }}"
+
+    # Patroni's state in etcd only means anything once PostgreSQL has been
+    # initialised, so when NO node holds a data directory there is nothing in
+    # etcd worth preserving. If any node is initialised this stays false and
+    # every destructive branch below is skipped.
+    - name: Derive the cluster-wide first-bootstrap flag
+      ansible.builtin.set_fact:
+        lab1_first_bootstrap: >-
+          {{ (groups['patroni_nodes'] | map('extract', hostvars, 'lab1_pgdata_state_word')
+              | reject('equalto', 'empty') | list | length) == 0 }}
+
+    - name: Assert every node reported a usable state
+      ansible.builtin.assert:
+        that:
+          - lab1_pgdata_state_word in ['empty', 'populated']
+          - (groups['patroni_nodes'] | map('extract', hostvars, 'lab1_pgdata_state_word') | list | length)
+            == (groups['patroni_nodes'] | length)
+        fail_msg: "Could not determine the PostgreSQL data directory state on every node."
+
+    - name: Report which path will be taken
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'First bootstrap: etcd may be cleared and re-formed if it fails.'
+             if lab1_first_bootstrap | bool
+             else 'Existing cluster: etcd data will not be touched.' }}
+      run_once: true
+
 - name: Start the three-member etcd cluster
   hosts: patroni_nodes
   become: true
   gather_facts: false
-  strategy: free
+  # Not `strategy: free`. Under the free strategy each host runs ahead
+  # independently, so the three starts below drift apart by seconds -- the exact
+  # condition Percona's guidance warns about.
   tasks:
-    - name: Enable and start etcd
+    # Belt and braces: the play-level flag is an aggregation across hostvars,
+    # and the second condition is this node's own answer. Both must agree, so a
+    # node that actually holds data is never wiped.
+    - name: Clear any stale etcd member directory before a first bootstrap
+      ansible.builtin.file:
+        path: "{{ lab1_etcd_data_dir }}/member"
+        state: absent
+      when:
+        - lab1_first_bootstrap | bool
+        - lab1_pgdata_state_word == 'empty'
+
+    - name: Clear any earlier failure counter before a first bootstrap
+      ansible.builtin.command: systemctl reset-failed etcd
+      when: lab1_first_bootstrap | bool
+      changed_when: true
+      failed_when: false
+
+    - name: Enable and start etcd on every node together
       ansible.builtin.systemd:
         name: etcd
         enabled: true
         state: started
+      register: lab1_etcd_start
+      failed_when: false
+
+    - name: Check whether etcd came up
+      ansible.builtin.command: systemctl is-active etcd
+      register: lab1_etcd_active
+      changed_when: false
+      failed_when: false
+
+    - name: Share this node's result with the others
+      ansible.builtin.set_fact:
+        lab1_etcd_state_word: "{{ 'up' if lab1_etcd_active.rc == 0 else 'down' }}"
+
+    - name: Decide whether a synchronised re-bootstrap is warranted
+      ansible.builtin.set_fact:
+        lab1_etcd_rebootstrap: >-
+          {{ (lab1_first_bootstrap | bool)
+             and ((groups['patroni_nodes'] | map('extract', hostvars, 'lab1_etcd_state_word')
+                   | reject('equalto', 'up') | list | length) > 0) }}
+
+    # One node failing poisons the whole first bootstrap, because the survivors
+    # are what report it as "already bootstrapped". Repairing that node alone is
+    # not possible, so all three are cleared and restarted together.
+    - name: Re-form etcd from empty on every node at once
+      when: lab1_etcd_rebootstrap | bool
+      block:
+        - name: Report the recovery
+          ansible.builtin.debug:
+            msg: >-
+              etcd did not form on every node. Clearing all three data
+              directories and restarting them simultaneously.
+          run_once: true
+
+        - name: Stop etcd everywhere
+          ansible.builtin.systemd:
+            name: etcd
+            state: stopped
+
+        - name: Clear the failure counter everywhere
+          ansible.builtin.command: systemctl reset-failed etcd
+          changed_when: true
+          failed_when: false
+
+        - name: Remove every member directory
+          ansible.builtin.file:
+            path: "{{ lab1_etcd_data_dir }}/member"
+            state: absent
+          when: lab1_pgdata_state_word == 'empty'
+
+        - name: Start etcd everywhere at once
+          ansible.builtin.systemd:
+            name: etcd
+            state: started
+          register: lab1_etcd_restart
+          failed_when: false
+
+    - name: Assert etcd is running
+      ansible.builtin.systemd:
+        name: etcd
+        state: started
+      register: lab1_etcd_final
+      until: lab1_etcd_final is succeeded
+      retries: 5
+      delay: 5
 
 - name: Verify etcd quorum and all three endpoints
   hosts: lab1-pg1

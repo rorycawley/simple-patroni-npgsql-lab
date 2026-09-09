@@ -40,6 +40,32 @@ the database VM.
 No TLS, mTLS, or other encryption-in-transit configuration is included in Lab 1,
 and the data volumes are not encrypted. [Lab 2](../../lab2/README.md) adds both.
 
+## Forming the etcd cluster
+
+`start-etcd.yml` starts all three members **together**, under Ansible's default
+linear strategy. This is load-bearing rather than incidental: etcd's static
+bootstrap only works when every member starts from an empty data directory at
+roughly the same time, and Percona's guidance says so directly — a first start
+may fail on a quorum timeout, and the remedy is to start all nodes again at the
+same time. An earlier version used `strategy: free`, which removed that barrier.
+
+When a member fails and the others form the cluster without it, the survivors
+report it as already known, and it can never bootstrap:
+
+```text
+member <id> has already been bootstrapped
+```
+
+That check queries the *peers*, not local disk, so clearing the failed node's
+data directory does not help. The recovery therefore clears **all three** and
+restarts them simultaneously — gated on no node holding a PostgreSQL data
+directory, which is what makes wiping etcd safe. On a live cluster every
+destructive task is skipped.
+
+The failure was observed in [Lab 2](../../lab2/README.md), not here. Lab 1 has
+the same static bootstrap and had the same `strategy: free`, so it carried the
+same exposure and takes the same fix.
+
 ## Network policy
 
 The firewall assigns `eth0` and `lima0` to a default `DROP` zone. It permits:

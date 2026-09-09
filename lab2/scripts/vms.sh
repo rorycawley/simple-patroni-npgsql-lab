@@ -209,6 +209,29 @@ create() {
   configure_hostnames
 }
 
+# `limactl delete --force` returns before Lima has released its reference to the
+# instance's disks, so an immediate `disk delete` can still fail with "in use by
+# instance". That is not cosmetic: the disk survives, the next `make all`
+# reattaches it, and the "fresh" build comes up holding the previous run's
+# PostgreSQL and etcd data. A stale etcd member directory meeting two genuinely
+# new members is what produces "member has already been bootstrapped" -- the
+# failure that was mistaken for a bootstrap race for several builds.
+#
+# `disk unlock` clears the stale reference; the retry covers the window where
+# Lima has simply not finished letting go yet.
+delete_disk() {
+  local disk_name="$1" attempt
+  for attempt in $(seq 1 15); do
+    if limactl disk delete "$disk_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    limactl disk unlock "$disk_name" >/dev/null 2>&1 || true
+    sleep 2
+  done
+  echo "Could not delete data disk after 15 attempts: $disk_name" >&2
+  return 1
+}
+
 destroy() {
   remove_hostnames
   if instance_exists "$APP_VM"; then
@@ -230,7 +253,11 @@ destroy() {
     for disk_name in $(data_disks_for "$vm_name"); do
       if disk_exists "$disk_name"; then
         echo "Deleting data disk: $disk_name"
-        limactl disk delete "$disk_name" >/dev/null
+        # Not fatal here: the explicit check below reports every disk that
+        # survived, which is more useful than aborting on the first one. Under
+        # `set -e` an unguarded failure would kill the script before that check
+        # could run -- which is exactly how a failed teardown went unreported.
+        delete_disk "$disk_name" || true
       fi
     done
   done
