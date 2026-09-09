@@ -1,7 +1,7 @@
 # Service accounts and secrets
 
 Every identity the cluster needs, what it may do, and which lab introduces it.
-Intended for storage in OpenBao.
+Intended for storage in OpenBao, with human identities in Keycloak.
 
 Two things commonly listed here are **not** accounts:
 
@@ -9,6 +9,68 @@ Two things commonly listed here are **not** accounts:
 | --- | --- |
 | `softdog` | A kernel module reached through `/dev/watchdog`. The control is device ownership — Patroni's process must hold it, and `watchdog.mode: required` already refuses to be primary otherwise. Nothing to store |
 | `pg_dump` | A client tool, not a service. It does need a role to run as, which is `dumper` below — worth defining, because the usual alternative is running it as superuser |
+
+## Identity boundaries: Keycloak, OpenBao, and neither
+
+Three systems hold identity here, and mixing them up is how a database outage
+becomes an outage nobody can log in to fix.
+
+> **Keycloak answers "who is this person?"**
+> **OpenBao answers "may this workload have this secret?"**
+> **Nothing that must work while the cluster is broken may depend on either.**
+
+### Keycloak
+
+| Identity | Why it belongs there |
+| --- | --- |
+| Grafana login (Lab 8) | Roles and teams map from groups, so dashboard access follows joiner/mover/leaver instead of a local user table |
+| Human access to OpenBao | Operators authenticate as themselves rather than sharing a static token — which is what makes the audit trail mean anything |
+| Human `psql` sessions | PostgreSQL 18 added OAuth 2.0 (`OAUTHBEARER`), so this is newly possible. Confirm against the Percona 18 build first: server-side validation needs a validator library that not every build ships |
+| The CI/CD pipeline (Lab 6) | The pipeline proves who it is to Keycloak, then draws a short-lived `migrator` credential from OpenBao |
+
+Note what the last row does *not* do: Keycloak authenticates the pipeline, but
+the database connection is still SCRAM. Keycloak is never in the connection path.
+
+### Not Keycloak
+
+| Identity | Why not |
+| --- | --- |
+| `postgres`, `replicator`, `rewind` | Patroni needs these to **fail over**. An identity-provider outage must never prevent a promotion |
+| `app_runtime` | Would put Keycloak on the write path, and token refresh interacts badly with the client's retry loop across a failover |
+| `pgbackrest` | Backups must run *especially* when other things are broken |
+| `monitoring` | Same, more so — monitoring matters most when other systems are down |
+| etcd and Patroni mTLS | Certificate identity from the Lab 2 CA; an IdP would add a dependency and no security |
+
+The rule behind the table: **nothing on the failover path may depend on an
+external identity provider.** Patroni promoting at 03:00 cannot be waiting on a
+token endpoint.
+
+### The dependency chain
+
+```text
+Keycloak  ->  OpenBao  ->  credential  ->  PostgreSQL
+```
+
+Every arrow is something that can be unavailable. During an automatic failover
+that is harmless, because nobody is authenticating. For anything a human must do
+under pressure, each hop is a place the recovery can stall.
+
+Two consequences follow, and both are easier to check now than to discover
+later.
+
+**Break-glass must work when Keycloak is down.** `operator` exists for the
+situation where things are broken, and "things are broken" plausibly includes the
+identity provider. Keycloak should govern who may retrieve that credential in
+normal times, but a sealed offline copy must exist that requires neither Keycloak
+nor OpenBao. Otherwise emergency access gains two new failure modes precisely
+when it is needed.
+
+**Check whether Keycloak runs on this cluster.** If its own database is here,
+the dependency is circular: recovering the cluster needs break-glass,
+break-glass needs Keycloak, Keycloak needs the cluster. That is the same shape as
+the [repository cipher passphrase](#the-repository-cipher-passphrase-protects-everything-else)
+problem — invisible until the one moment it matters. If Keycloak does run here,
+its identities cannot be part of this cluster's recovery path.
 
 ## OS process users
 
@@ -209,7 +271,9 @@ deliberately. Worth a decision, not a default.
 ## Break-glass
 
 `operator` is a superuser, separate from `postgres`, audited, and expected to go
-unused. It exists because [strict synchronous mode](SLA.md#the-exception-being-closed)
+unused. Who may retrieve it is a Keycloak question; whether it still works when
+Keycloak is down is the [identity-boundary](#the-dependency-chain) question, and
+the answer must be yes. It exists because [strict synchronous mode](SLA.md#the-exception-being-closed)
 created a state that does not resolve itself: with both standbys gone, writes
 block until someone intervenes. That intervention should be a named, logged
 identity rather than whichever superuser credential was closest to hand.
