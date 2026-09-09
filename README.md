@@ -18,7 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| [`lab6/README.md`](lab6/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
+| [`lab3/README.md`](lab3/README.md), [`lab6/README.md`](lab6/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 
@@ -28,7 +28,7 @@ Each file below owns one subject and does not repeat another's.
 | --- | --- | --- | --- | --- |
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | plaintext | plaintext | 3 |
 | [2](lab2/README.md) | Everything Lab 1 proves, on encrypted disks and an encrypted network | LUKS2, separate volumes for PostgreSQL and etcd | TLS on every channel, mutual where the peer is a machine | 4 |
-| 3 — not started | Durable backups: a pgBackRest repository on MinIO, off the database hosts, encrypted and reached over TLS | — | — | — |
+| [3](lab3/README.md) — specified, not built | Durable backups: pgBackRest **and** `pg_dump` to a MinIO repository, off the database hosts, encrypted and reached over TLS | — | — | — |
 | 4 — not started | Recovery: restoring from a Lab 3 backup, including to a point in time, and proving the restored cluster holds the right data | — | — | — |
 | 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
 | [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
@@ -38,8 +38,15 @@ Each file below owns one subject and does not repeat another's.
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
 network. Lab 2 removes that constraint.
 
-Backup and recovery are deliberately two labs rather than one. Lab 3 can finish
-green while proving nothing about recovery: a repository that accepts writes,
+[Lab 3](lab3/README.md) takes two kinds of backup, because they recover
+different disasters. pgBackRest copies bytes and restores the whole cluster to a
+point in time; `pg_dump` reads every row through PostgreSQL's own executor and
+restores a single table. The sharpest difference is that **a physical backup
+faithfully backs up corruption and a logical dump cannot** — a dump that
+completes is evidence the data is readable, not merely that bytes were copied.
+
+Backup and recovery are then deliberately two labs rather than one. Lab 3 can
+finish green while proving nothing about recovery: a repository that accepts writes,
 passes `pgbackrest check` and reports a valid backup set is still only evidence
 that *taking* a backup works. Lab 4 is where that evidence is tested — restore a
 cluster from the repository, bring it back to a chosen point in time, and assert
