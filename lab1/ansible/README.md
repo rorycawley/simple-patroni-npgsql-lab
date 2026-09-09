@@ -16,8 +16,11 @@ It follows Percona's RPM and HA guidance:
 - forms a static three-member etcd cluster, starts Patroni on each node, and
   verifies one leader plus two streaming replicas;
 - configures quorum commit (`synchronous_mode: quorum`, `synchronous_node_count: 1`,
-  and an explicit `synchronous_commit: on`, without which the quorum expression
-  would be inert), so an acknowledged transaction cannot be lost in a failover;
+  `synchronous_mode_strict: true`, and an explicit `synchronous_commit: on`,
+  without which the quorum expression would be inert), so an acknowledged
+  transaction cannot be lost in a failover. Strict mode means the guarantee has
+  no exception: with no standby able to confirm, a commit blocks rather than
+  completing on one node;
 - configures and verifies `softdog` watchdog fencing;
 - creates a least-privilege `app_runtime` login, `appdb`, and the write-probe
   table;

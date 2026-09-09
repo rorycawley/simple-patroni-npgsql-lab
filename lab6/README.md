@@ -98,7 +98,7 @@ different route — there by failover, here by an aborted pipeline.
   replica it fails read-only — noisy but safe.
 - **Quorum commit taxes backfills.** Every batch commit waits for a standby
   fsync, so batch size matters more here than on an asynchronous cluster.
-- **If [`synchronous_mode_strict`](../SLA.md#the-one-exception) is enabled**, a
+- **If [`synchronous_mode_strict`](../SLA.md#the-exception-being-closed) is enabled**, a
   migration running while both standbys are unavailable will block rather than
   proceed. Correct behaviour, and the reason AC-5's gate checks cluster health
   before migrating rather than after failing.

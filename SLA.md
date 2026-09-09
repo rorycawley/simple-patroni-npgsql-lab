@@ -1,22 +1,30 @@
 # Availability, RPO and RTO
 
-> ### ⚠ Architectural decision required — `synchronous_mode_strict`
+> ### Decision taken — `synchronous_mode_strict` will be enabled
 >
-> This document states that the cluster chooses durability over availability.
-> The configuration does not fully implement that: with every standby gone it
-> falls back to asynchronous **silently**, and RPO stops being zero without the
-> client being told.
+> **Durability is favoured over availability, without exception.** An
+> acknowledged transaction must survive, and the cluster must refuse to
+> acknowledge one it cannot make durable on a second node.
 >
-> **The decision:** accept the silent fallback, or make the guarantee
-> unconditional and accept that writes block while both standbys are
-> unavailable.
+> This closes the gap where the cluster silently fell back to asynchronous once
+> the last standby was gone. The accepted cost: with both standbys unavailable,
+> writes **block** until one returns. That is a real outage, chosen deliberately
+> in exchange for a guarantee that never lapses.
 >
-> It is one line, it changes behaviour under fault, and it is not ours to take
-> unilaterally — the right answer depends on whether the business prefers a
-> cluster that keeps accepting writes on a single node to one that stops.
+> Rationale and consequences: [The exception being closed](#the-exception-being-closed).
 >
-> Trade-off, cost, and a recommendation: [The one exception](#the-one-exception).
-> **Status: open. The labs currently ship the non-strict setting.**
+> **Status: implemented and verified in Lab 1; Lab 2 still to follow.** Lab 1
+> proves it with a mutation test — the same fault, the same cluster, only the
+> setting changed:
+>
+> ```text
+> strict ON    synchronous_standby_names 'ANY 1 (*)'   SyncRep   commit blocked
+> strict OFF   synchronous_standby_names ''            none      commit completed
+> ```
+>
+> `ANY 1 (*)` is Patroni's unsatisfiable placeholder — the concrete artefact of
+> it refusing to degrade. Until Lab 2 follows, its rows below still describe the
+> non-strict behaviour.
 
 What the labs establish about data loss and downtime, per failure mode.
 
@@ -60,24 +68,24 @@ failover silently loses whatever had not yet reached the standby. For a lab whos
 premise is that the client must not lose an acknowledged transaction, that trade
 is the wrong way round.
 
-### The one exception
+### The exception being closed
 
-Quorum commit is enabled but `synchronous_mode_strict` is **not**:
+Quorum commit alone left one gap. Without `synchronous_mode_strict`, Patroni
+clears `synchronous_standby_names` when no standby can confirm, and the primary
+carries on asynchronously — silently. The client is not told, and its durability
+guarantee weakens with no signal. That invisibility is the strongest argument
+against keeping it.
+
+The decision is to set it:
 
 ```yaml
-synchronous_mode: quorum        # durability over availability
+synchronous_mode: quorum
 synchronous_node_count: 1
-# synchronous_mode_strict: unset -> availability over durability
-#                                   once the last standby is gone
+synchronous_mode_strict: true   # durability over availability, unconditionally
 ```
 
-If *every* standby is lost, Patroni falls back to asynchronous rather than
-refusing writes, reversing the stance above: it keeps accepting writes no second
-node holds, and RPO stops being zero.
-
-Making the stance unconditional is one line — `synchronous_mode_strict: true` in
-`patroni-dcs.yml.j2`. Strict mode does not clear `synchronous_standby_names`, so
-commits block in `SyncRep` until a standby returns.
+Strict mode refuses to clear `synchronous_standby_names`, so commits block in
+`SyncRep` until a standby returns rather than completing on one node.
 
 **The availability cost is smaller than it first appears.** etcd runs on the same
 three nodes, so losing two nodes already means losing etcd quorum: the survivor
@@ -93,20 +101,21 @@ this setting says. The two options only diverge in a narrower case.
 The last row is the whole decision, and it is a realistic one: both replicas
 restarting, both lagging, a disk full on both, a botched rolling change.
 
-**Recommendation: enable it**, given this series' premise that an acknowledged
-transaction must not be lost. It removes an exception that is invisible to the
-client, which is the worst kind — durability weakens and nothing signals it. Two
-conditions come with it:
+Two operating conditions come with the decision, and both are requirements
+rather than caveats:
 
-- **It presents as a hang, not an error.** Clients need a command timeout or
-  pools fill and the application stalls, turning a database problem into an
-  application outage. The lab client sets `Command Timeout=10`.
+- **It presents as a hang, not an error.** A blocked commit waits; it does not
+  fail fast. Clients need a command timeout or their pools fill and the
+  application stalls, turning a database problem into an application-wide
+  outage. The lab client sets `Command Timeout=10`, which is why this is
+  survivable here — the same timeout that bounds a stalled node also bounds a
+  blocked commit.
 - **Rolling maintenance must never take both standbys out at once.** With
-  `synchronous_node_count: 1`, one can always be lost freely.
+  `synchronous_node_count: 1`, one can always be lost freely; the second is what
+  stops writes.
 
-It would be the wrong call only if the business prefers a cluster that keeps
-accepting writes on a single node to one that stops — a legitimate preference,
-but not this one.
+The opposite choice remains legitimate for a workload that would rather keep
+accepting orders on a single node than stop. It is not this one.
 
 ## Per failure mode
 
@@ -119,15 +128,16 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | PostgreSQL killed, Patroni alive | **0** | ~10–25s | ≤ 120 events/yr | measured |
 | Patroni frozen, PostgreSQL serving | **0** | ~25–60s | ≤ 50 events/yr | measured |
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
-| Every standby lost at once | **> 0, unbounded** | none; writes continue | [the exception](#the-one-exception) | configured |
-| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 6 — not built |
+| Every standby lost at once — *Lab 1, strict* | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
+| Every standby lost at once — *Lab 2, not yet strict* | **> 0, unbounded** | none; writes continue | non-strict behaviour, still to be replaced | configured |
+| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 7 — not built |
 
 **The last row is outside what HA can address.** Failover, fencing and quorum
 commit all assume a node stopped working. A bad migration or an erroneous
 `DELETE` is the cluster working correctly on a wrong instruction: replication
 carries it to every standby in milliseconds, and quorum commit makes it durable
 before it is acknowledged. No healthy node retains the old state. Only a backup
-answers it, which is why Labs 3, 4 and 6 exist and why that RTO is blank rather
+answers it, which is why Labs 3, 4 and 7 exist and why that RTO is blank rather
 than guessed.
 
 ## Where the numbers come from

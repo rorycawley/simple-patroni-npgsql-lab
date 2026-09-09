@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Proves the cluster really does replicate with quorum commit, at three levels:
+# Proves the cluster really does replicate with quorum commit, at four levels:
 #
 #   topology    Patroni has PostgreSQL configured for quorum commit right now --
 #               synchronous_standby_names is an "ANY n (...)" expression and both
@@ -12,12 +12,18 @@ set -uo pipefail
 #               wait_event = SyncRep and cancelled, which makes PostgreSQL report
 #               that it was waiting for synchronous replication. Neither signal
 #               can occur on an asynchronous cluster.
+#   strict      With no standby able to confirm, the cluster BLOCKS rather than
+#               degrading to asynchronous. Both standbys are stopped outright --
+#               freezing a walreceiver is not enough, because the connection
+#               stays open and Patroni never degrades the quorum. Its negative
+#               control turns synchronous_mode_strict off while the same commit
+#               is still blocked, and requires it to complete.
 #   durability  No acknowledged transaction is lost when the primary is destroyed.
 #               Rows are committed, the primary VM is force-stopped immediately,
 #               and every acknowledged row must be present on the promoted node.
 #
 # topology alone would pass on a cluster that merely *claims* to be synchronous,
-# which is why blocking and durability exist.
+# which is why the other three exist.
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -28,10 +34,13 @@ readonly EXPECTED_NODE_COUNT=1
 readonly DURABILITY_ROWS=200
 # Tags the deliberately blocked commit so its backend can be found and cancelled.
 readonly BLOCK_PROBE_APP=lab1-sync-block-probe
+# Tags the strict-mode probe separately, so the two blocked commits cannot be
+# confused when a run is interrupted and one is left behind.
+readonly STRICT_PROBE_APP=lab1-sync-strict-probe
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/test-sync-replication.sh [topology|blocking|durability|all]
+Usage: ./scripts/test-sync-replication.sh [topology|blocking|strict|durability|all]
 EOF
 }
 
@@ -45,6 +54,8 @@ done
 
 frozen_vms=()
 stopped_vm=""
+stopped_standbys=()
+strict_disabled=""
 block_pid=""
 block_output=""
 
@@ -60,6 +71,27 @@ cleanup() {
     [[ -n "$vm" ]] && limactl shell --tty=false "$vm" \
       sudo pkill -CONT -f '[w]alreceiver' 2>/dev/null
   done
+  # Restart the standbys BEFORE restoring strict mode: with strict on and no
+  # standby present, the cluster cannot accept writes, so leaving it that way
+  # after a failed run would look like a broken cluster rather than an aborted
+  # test.
+  for vm in "${stopped_standbys[@]:-}"; do
+    [[ -n "$vm" ]] && limactl shell --tty=false "$vm" \
+      sudo systemctl start percona-patroni >/dev/null 2>&1
+  done
+  # The test disables strict mode deliberately as its negative control. If it
+  # dies in that window the cluster would silently keep the weaker guarantee,
+  # which is the exact condition this whole change exists to prevent.
+  if [[ -n "$strict_disabled" ]]; then
+    for vm in "${VM_NAMES[@]}"; do
+      if limactl shell --tty=false "$vm" sudo -u postgres \
+        patronictl -c "$PATRONI_CONFIG" edit-config --force \
+        -s synchronous_mode_strict=true >/dev/null 2>&1; then
+        echo "  cleanup: restored synchronous_mode_strict=true" >&2
+        break
+      fi
+    done
+  fi
   if [[ -n "$stopped_vm" ]]; then
     limactl start --tty=false "$stopped_vm" >/dev/null 2>&1
   fi
@@ -212,6 +244,141 @@ test_blocking() {
   echo "PASS (blocking)"
 }
 
+# AC: with no standby able to confirm, the cluster BLOCKS rather than quietly
+# degrading to asynchronous.
+#
+# This needs a different fault from test_blocking. Freezing a walreceiver leaves
+# the replication connection open, so Patroni still counts the standby as present
+# and never degrades the quorum -- which is why that test behaves identically with
+# or without strict mode. To exercise strict mode the standbys have to actually
+# go away, so Patroni is forced to decide what to do with an unsatisfiable
+# synchronous_standby_names.
+#
+# Stopping percona-patroni takes PostgreSQL down with it while leaving etcd
+# running on those nodes, so etcd quorum is intact and the leader keeps its key.
+# That is precisely the "both standby databases down, nodes up" case -- the only
+# situation where strict and non-strict actually differ.
+
+# Runs the fault once and reports what the cluster did: the value Patroni leaves
+# in synchronous_standby_names, and whether a commit completes. Used twice, with
+# strict on and off, so the two runs differ only in that setting.
+#
+# The setting MUST already be reconciled before this is called. Toggling it while
+# the cluster is stuck does not work -- Patroni leaves synchronous_standby_names
+# untouched, which an earlier version of this test misread as strict mode being
+# unprovable.
+strict_fault_probe() {
+  local primary="$1" senders wait_event names completed=no
+  local vm
+
+  for vm in "${VM_NAMES[@]}"; do
+    if [[ "$vm" != "$primary" ]]; then
+      limactl shell --tty=false "$vm" sudo systemctl stop percona-patroni >/dev/null 2>&1
+      stopped_standbys+=("$vm")
+    fi
+  done
+
+  senders=""
+  for _ in {1..30}; do
+    senders="$(sql "$primary" "select count(*) from pg_stat_replication" 2>/dev/null)"
+    [[ "$senders" == "0" ]] && break
+    sleep 2
+  done
+  [[ "$senders" == "0" ]] || { echo "  could not detach the standbys (${senders:-?} walsenders)"; return 2; }
+  sleep 15
+
+  names="$(sql "$primary" "show synchronous_standby_names" 2>/dev/null)"
+
+  block_output="$(mktemp "${TMPDIR:-/tmp}/lab1-strict.XXXXXX")"
+  limactl shell --tty=false "$primary" sudo -u postgres \
+    env PGAPPNAME="$STRICT_PROBE_APP" "$POSTGRES_BIN_DIR/psql" -d appdb -Atc \
+    "insert into public.sync_probe default values" > "$block_output" 2>&1 &
+  block_pid=$!
+
+  wait_event=""
+  for _ in {1..20}; do
+    if ! kill -0 "$block_pid" 2>/dev/null; then completed=yes; break; fi
+    wait_event="$(sql "$primary" "select coalesce(wait_event, '') from pg_stat_activity where application_name = '$STRICT_PROBE_APP' and state = 'active' limit 1" 2>/dev/null)"
+    [[ "$wait_event" == "SyncRep" ]] && break
+    sleep 1
+  done
+  [[ "$completed" == no ]] && { kill "$block_pid" 2>/dev/null; wait "$block_pid" 2>/dev/null; }
+  block_pid=""
+  rm -f "$block_output"; block_output=""
+
+  for vm in "${stopped_standbys[@]}"; do
+    limactl shell --tty=false "$vm" sudo systemctl start percona-patroni >/dev/null 2>&1
+  done
+  stopped_standbys=()
+  wait_for_quorum || { echo "  quorum did not recover after restarting the standbys"; return 2; }
+
+  PROBE_NAMES="$names"
+  PROBE_WAIT="$wait_event"
+  PROBE_COMPLETED="$completed"
+  return 0
+}
+
+set_strict() {
+  local primary="$1" value="$2"
+  limactl shell --tty=false "$primary" sudo -u postgres \
+    patronictl -c "$PATRONI_CONFIG" edit-config --force \
+    -s "synchronous_mode_strict=$value" >/dev/null 2>&1
+  # Applied while the cluster is healthy, so Patroni can actually reconcile it.
+  sleep 20
+}
+
+test_strict() {
+  echo
+  echo "=== Strict mode: writes stop rather than silently degrade ==="
+  local primary strict failures=0
+
+  wait_for_quorum || { fail "cluster was not settled before the test"; return 1; }
+  primary="$(leader_vm)"
+  echo "  primary is $primary"
+  sql "$primary" "create table if not exists public.sync_probe (id bigserial primary key, at timestamptz default clock_timestamp())" >/dev/null 2>&1
+
+  strict="$(limactl shell --tty=false "$primary" sudo -u postgres \
+    patronictl -c "$PATRONI_CONFIG" show-config 2>/dev/null \
+    | grep -E '^synchronous_mode_strict:' | awk '{print $2}')"
+  [[ "$strict" == "true" ]] \
+    || { fail "synchronous_mode_strict is '${strict:-unset}', expected true"; return 1; }
+  pass "synchronous_mode_strict is true in the DCS"
+
+  echo "  --- with strict mode ON ---"
+  strict_fault_probe "$primary" || { fail "could not run the fault with strict on"; return 1; }
+  echo "  synchronous_standby_names: '$PROBE_NAMES'   wait_event: '${PROBE_WAIT:-none}'   commit completed: $PROBE_COMPLETED"
+  # Patroni's strict marker: a requirement that no standby can satisfy, rather
+  # than an empty string that would let the commit through.
+  [[ -n "$PROBE_NAMES" ]] \
+    || { fail "strict mode left synchronous_standby_names empty, which is what it exists to prevent"; failures=$((failures+1)); }
+  [[ "$PROBE_WAIT" == "SyncRep" && "$PROBE_COMPLETED" == "no" ]] \
+    || { fail "the commit did not block; the cluster degraded to asynchronous"; failures=$((failures+1)); }
+  (( failures == 0 )) && pass "with no standby the requirement is kept ('$PROBE_NAMES') and the commit blocks in SyncRep"
+
+  # The negative control, and the only reason the above means anything: the same
+  # fault on the same cluster, with only this setting changed. Toggled here while
+  # the cluster is HEALTHY so Patroni can reconcile it before the fault.
+  echo "  --- negative control: same fault with strict mode OFF ---"
+  set_strict "$primary" false
+  strict_disabled=yes
+  strict_fault_probe "$primary" || { fail "could not run the fault with strict off"; failures=$((failures+1)); }
+  echo "  synchronous_standby_names: '$PROBE_NAMES'   wait_event: '${PROBE_WAIT:-none}'   commit completed: $PROBE_COMPLETED"
+
+  if [[ -z "$PROBE_NAMES" && "$PROBE_COMPLETED" == "yes" ]]; then
+    pass "without strict mode Patroni cleared the requirement and the commit completed - the difference is the setting, not timing"
+  else
+    fail "without strict mode the cluster behaved the same, so the block above cannot be attributed to strict mode"
+    failures=$((failures+1))
+  fi
+
+  set_strict "$primary" true
+  strict_disabled=""
+  pass "synchronous_mode_strict restored to true"
+
+  (( failures == 0 )) || { echo "FAILED (strict): $failures problem(s)" >&2; return 1; }
+  echo "PASS (strict)"
+}
+
 test_durability() {
   echo
   echo "=== Quorum commit: no acknowledged transaction is lost on failover ==="
@@ -239,8 +406,12 @@ test_durability() {
     [[ -n "$new_primary" && "$new_primary" != "$primary" && "$new_primary" != "lab1-" ]] && break
     sleep 2
   done
-  [[ -n "$new_primary" && "$new_primary" != "$primary" ]] \
-    || { fail "no new primary was promoted"; return 1; }
+  # "lab1-" is what leader_vm returns when patronictl reports no leader at all:
+  # it is non-empty and different from the old primary, so without this guard it
+  # sails through as a promotion and the failure surfaces later as "data was
+  # lost" -- blaming durability for what is actually a missing leader.
+  [[ -n "$new_primary" && "$new_primary" != "$primary" && "$new_primary" != "lab1-" ]] \
+    || { fail "no new primary was promoted within 90s (last seen: '${new_primary}')"; return 1; }
   pass "promoted $new_primary"
 
   surviving="$(sql "$new_primary" "select count(*) from public.sync_durability")"
@@ -259,10 +430,12 @@ main() {
   case "${1:-all}" in
     topology) test_topology ;;
     blocking) test_blocking ;;
+    strict) test_strict ;;
     durability) test_durability ;;
     all)
       test_topology || exit 1
       test_blocking || exit 1
+      test_strict || exit 1
       test_durability || exit 1
       ;;
     *) usage; exit 2 ;;

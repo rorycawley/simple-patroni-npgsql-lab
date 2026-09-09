@@ -17,7 +17,7 @@ duplicates an acknowledged transaction.
 | A client with short timeouts, a bounded pool, and retries scoped to connection failures | Retrying arbitrary transactions; a lost acknowledgement is reported, not reissued |
 | Failover from two different faults: the node dies, and PostgreSQL alone dies | Load balancing reads across standbys |
 | Split-brain prevention, both watchdog fencing and voluntary demotion | Hardware or hypervisor watchdogs; `softdog` is a kernel timer |
-| Quorum commit, so an acknowledged commit survives promotion | `synchronous_mode_strict`; writes stay available when no standby remains |
+| Quorum commit with `synchronous_mode_strict`, so an acknowledged commit survives promotion and the guarantee never lapses | Preserving write availability when no standby remains — writes block instead, deliberately |
 | pgBackRest installed, with a local per-node repository and WAL archiving | A durable backup design. Local repositories prove configuration, not disaster recovery. Backups are Lab 3 |
 
 Lab 1 runs on an unencrypted disk and an unencrypted network. Run it only on an
@@ -158,9 +158,16 @@ would pass on a cluster that merely claims to be synchronous.
 | --- | --- |
 | `topology` | `synchronous_standby_names` is an `ANY n (...)` quorum expression rather than `FIRST n`, `synchronous_node_count` is 1, `synchronous_commit` is `on`, and both standbys report `sync_state = quorum` |
 | `blocking` | Both walreceivers are frozen, and the committing backend is then observed parked in `wait_event = SyncRep`. Cancelling it makes PostgreSQL report `canceling wait for synchronous replication` |
+| `strict` | With **both standbys stopped outright**, Patroni keeps an unsatisfiable `synchronous_standby_names` of `ANY 1 (*)` and the commit blocks. Its negative control repeats the identical fault with `synchronous_mode_strict` off and requires the opposite: the requirement is cleared and the commit completes |
 | `durability` | 200 rows are committed, the primary VM is force-stopped with no clean shutdown, and every acknowledged row is present on the promoted node |
 
-The `blocking` tier is the decisive one. `SyncRep` is PostgreSQL's own name for a
+The `strict` tier needs a heavier fault than `blocking` does. Freezing a
+walreceiver leaves the replication connection open, so Patroni still counts the
+standby as present and never degrades the quorum — that tier behaves identically
+with strict on or off. Only stopping the standbys outright forces Patroni to
+decide, which is why this one takes minutes rather than seconds.
+
+The `blocking` tier is the decisive one for quorum commit itself. `SyncRep` is PostgreSQL's own name for a
 backend waiting on a synchronous standby, so that wait state cannot occur on an
 asynchronous cluster at all — no timing heuristic is involved.
 
@@ -277,7 +284,7 @@ From an empty machine:
  PASS  Cluster services, quorum, replication, pgBackRest                    6s
  PASS  Criterion 1: client connects to the primary and queries it           1s
  PASS  Client guarantees: pool limit, timeouts, no blind retry             18s
- PASS  Quorum commit: configured, blocking, and lossless                   47s
+ PASS  Quorum commit: configured, blocking, strict, and lossless         3m11s
  PASS  Criterion 2: failover after the primary VM is lost                  57s
  PASS  Criterion 2: failover after PostgreSQL is killed                    14s
  PASS  Split brain: softdog fences a frozen Patroni                        42s

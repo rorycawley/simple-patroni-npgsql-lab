@@ -147,6 +147,35 @@ wait_for_new_leader() {
 # Called when a node fails to rejoin. Without this the only signal is "did not
 # rejoin", which says nothing about whether Patroni is crash-looping, its config
 # is unreadable, or replication simply has not caught up yet.
+# Called when no new leader appears. "A new Patroni leader was not elected" on
+# its own says nothing about WHY: it looks identical whether etcd lost quorum,
+# the survivors are healthy but not promoting, or Patroni is deliberately
+# refusing to promote a candidate it cannot confirm is caught up -- which is a
+# real possibility under synchronous_mode_strict, where declining to promote an
+# unconfirmed node is correct behaviour rather than a fault.
+diagnose_election() {
+  local survivor="$1" vm
+  echo "--- diagnostics: no new leader elected ---" >&2
+  echo "  Patroni's view from $survivor:" >&2
+  limactl shell --tty=false "$survivor" sudo -u postgres \
+    patronictl -c /etc/patroni/patroni.yml list 2>&1 | sed 's/^/    /' >&2 || true
+  echo "  DCS sync state and config:" >&2
+  limactl shell --tty=false "$survivor" sudo -u postgres \
+    patronictl -c /etc/patroni/patroni.yml show-config 2>&1 \
+    | grep -iE 'synchronous|ttl|loop_wait' | sed 's/^/    /' >&2 || true
+  echo "  etcd endpoint health:" >&2
+  limactl shell --tty=false "$survivor" sudo bash -c \
+    "etcdctl --endpoints=http://${PG1_IP}:2379,http://${PG2_IP}:2379,http://${PG3_IP}:2379 endpoint health" 2>&1 \
+    | sed 's/^/    /' >&2 || true
+  for vm in "${VM_NAMES[@]}"; do
+    printf '  %s: patroni=%s etcd=%s\n' "$vm" \
+      "$(limactl shell --tty=false "$vm" systemctl is-active percona-patroni 2>&1)" \
+      "$(limactl shell --tty=false "$vm" systemctl is-active etcd 2>&1)" >&2
+    limactl shell --tty=false "$vm" sudo journalctl -u percona-patroni --no-pager -n 8 2>/dev/null \
+      | sed "s/^/    $vm | /" >&2 || true
+  done
+}
+
 diagnose_node() {
   local vm="$1"
   echo "--- diagnostics for $vm ---" >&2
@@ -350,6 +379,7 @@ run_scenario() {
 
   new_leader="$(wait_for_new_leader "$survivor" "$initial_leader")" || {
     echo "A new Patroni leader was not elected" >&2
+    diagnose_election "$survivor"
     return 1
   }
   echo "Patroni promoted $new_leader"

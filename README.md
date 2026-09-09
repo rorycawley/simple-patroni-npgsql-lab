@@ -144,9 +144,21 @@ standby has flushed it, and Patroni tracks the eligible set in the DCS, so only 
 node known to be caught up can be promoted. An acknowledged transaction therefore
 cannot be lost in a failover.
 
-This is not `synchronous_mode_strict`. If every standby is lost, Patroni falls
-back to asynchronous rather than refusing writes — choosing availability at the
-point where no replica remains to be durable against.
+**The labs favour durability over availability, without exception**, so
+`synchronous_mode_strict` is enabled. Patroni will not clear
+`synchronous_standby_names` when no standby can confirm, so a commit blocks
+rather than completing on a single node. The accepted cost is that with every
+standby unavailable, writes stop until one returns.
+
+Two conditions follow from that and are not optional: clients need a command
+timeout, because a blocked commit hangs rather than failing fast, and rolling
+maintenance must never take both standbys out at once. The reasoning is in
+[`SLA.md`](SLA.md#the-exception-being-closed).
+
+> **Status: implemented and verified in Lab 1** — `make test_sync` includes a
+> mutation test that runs the same fault with the setting on and off and
+> requires opposite outcomes. **Lab 2 still to follow**; until then it falls
+> back to asynchronous when the last standby is gone.
 
 ## Prerequisites
 

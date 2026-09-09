@@ -106,7 +106,8 @@ Otherwise this follows Percona's RPM and HA guidance, as Lab 1 does:
   verifies one leader plus two streaming replicas;
 - configures quorum commit (`synchronous_mode: quorum`, `synchronous_node_count: 1`,
   and an explicit `synchronous_commit: on`, without which the quorum expression
-  would be inert);
+  would be inert). `synchronous_mode_strict` is **not yet set here** — the
+  decision to enable it lands in Lab 1 first and is carried over afterwards;
 - configures and verifies `softdog` watchdog fencing;
 - creates a least-privilege `app_runtime` login, `appdb`, and the write-probe
   table;
