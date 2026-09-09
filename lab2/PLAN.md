@@ -369,6 +369,13 @@ consistent with it being gone and would also be consistent with bad luck. The
 evidence that carries weight is the reproduction above, where the failure is
 staged deliberately and the recovery is watched repairing it.
 
+**Lab 1 took the same fix.** It had the identical `strategy: free` and the same
+untuned restart budget, so it carried the same exposure even though the failure
+was only ever seen here. Validated with one from-scratch build — 10 of 10, clean
+bootstrap — which is the right amount of evidence for the question it answers:
+whether the rewritten playbook works against Lab 1's own variables, paths and
+topology. Measuring a rate was Lab 2's job and is already done.
+
 Two further bugs were found only by building from empty rather than iterating on a
 running cluster: `/etc/lab2` was created `0700` as a side effect of the LUKS key
 directory, so every service was denied its certificates with a "permission

@@ -176,6 +176,25 @@ From an empty machine:
 The four encryption checks sit above the Lab 1 ones deliberately: if the cluster
 is not encrypted there is little point asking whether it fails over correctly.
 
+That block is one run. Across seven consecutive from-scratch builds the aggregate
+is less uniform, and worth stating rather than leaving a single green result to
+imply reliability:
+
+| Criterion | Checks | Result |
+| --- | --- | --- |
+| AC-1 at rest | `test_at_rest` | 7 / 7 |
+| AC-2 in transit | `test_in_transit`, `test_pki` | 7 / 7 |
+| AC-3 identity | `test_identity` | 7 / 7 |
+| AC-4 availability | every Lab 1 check | **6 / 7** |
+
+The single failure was `test_fencing_patroni`: the fence itself worked — the node
+reset and its boot id changed — but no new leader was elected inside the 90s
+budget. Roughly one in ten across all runs to date. Whether encryption
+contributes is not established: the failure has no obvious link to LUKS or TLS,
+and Lab 1 passes the same check unencrypted, but one comparison run is not
+evidence. That path now emits full diagnostics on failure, so the next occurrence
+produces something to work from.
+
 ### Individual phases
 
 ```sh
