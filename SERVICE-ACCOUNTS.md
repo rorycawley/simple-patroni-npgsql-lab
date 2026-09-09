@@ -10,8 +10,58 @@ Two things commonly listed here are **not** accounts:
 | `softdog` | A kernel module reached through `/dev/watchdog`. The control is device ownership — Patroni's process must hold it, and `watchdog.mode: required` already refuses to be primary otherwise. Nothing to store |
 | `pg_dump` | A client tool, not a service. It does need a role to run as, which is `dumper` below — worth defining, because the usual alternative is running it as superuser |
 
-The OS users `postgres` and `etcd` are also out of scope: system accounts with no
-login and no stored password.
+## OS process users
+
+These are a different thing from the database roles below, and both are needed.
+A process user is *not* an OpenBao secret: it is `nologin` with no password, and
+its "credential" is the `User=` directive in the systemd unit plus file
+ownership. There is nothing to store.
+
+What each process *does* need is an **identity to authenticate to OpenBao with** —
+the answer to "who is asking for `repo1-cipher-pass`?" That is an AppRole,
+certificate or JWT bound to the workload on that node, and it is the piece most
+easily forgotten because it is neither a Unix account nor a database role.
+
+| Service | Runs as | Needs to read from OpenBao |
+| --- | --- | --- |
+| PostgreSQL | `postgres` | — (Patroni supplies its configuration) |
+| Patroni | `postgres` | superuser, replication and rewind passwords |
+| pgBackRest | `postgres` | repository credentials and cipher passphrase |
+| etcd | `etcd` | its TLS key, if issued rather than pre-placed |
+| `node_exporter` | own user | nothing |
+| `postgres_exporter` | own user | the `monitoring` role's password |
+| Alloy | own user | its Loki/Mimir credentials — see below |
+
+### Three workloads share the `postgres` user
+
+PostgreSQL, Patroni and pgBackRest all run as `postgres`. This is conventional
+and largely unavoidable — Patroni must start and stop PostgreSQL, and pgBackRest
+must read `PGDATA` — but the consequence is worth stating rather than
+discovering: **`/etc/patroni/patroni.yml` contains the superuser and replication
+passwords in cleartext**, mode `0600 postgres`. Anything running as that user can
+read them, so pgBackRest is effectively as privileged as Patroni.
+
+Fetching those passwords from OpenBao at start rather than templating them into
+the file is what would close this, and it is the strongest practical argument for
+using a secrets manager here at all.
+
+### The collectors should not share it
+
+For Lab 8 the separation is available and worth taking. `postgres_exporter`
+connects as the `monitoring` *database* role and has no reason to be the
+`postgres` *OS* user.
+
+Alloy is the one with a real design decision behind it: it must read logs, and
+PostgreSQL's are `0600 postgres`. It therefore needs a group, a filesystem ACL,
+or journald — and **not** membership of `postgres`, which would hand the log
+collector the superuser password.
+
+### Bootstrapping
+
+Certificate authentication is the natural fit here, because every node already
+holds a per-purpose identity from the Lab 2 CA. That avoids delivering an
+AppRole `secret_id` out of band and makes OpenBao a third consumer of the "one
+CA, extended" decision rather than a new trust root.
 
 ## PostgreSQL roles
 
