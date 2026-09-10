@@ -30,11 +30,15 @@ timeout, clients without one simply stop and their connection pools fill.
 
 ## Confirm it is this
 
-```sql
-SHOW synchronous_standby_names;     -- ANY 1 (*)  <- unsatisfiable placeholder
-SELECT pid, wait_event, state, query
-  FROM pg_stat_activity
- WHERE wait_event = 'SyncRep';
+`patroni.yml` is `0600 postgres` and `psql` is not on `PATH` — every command here
+runs as the `postgres` user with the full binary path, as the lab scripts do.
+
+```sh
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc "show synchronous_standby_names"
+# ANY 1 (*)   <- unsatisfiable placeholder
+
+sudo -u postgres /usr/pgsql-18/bin/psql -c \
+  "select pid, wait_event, state, query from pg_stat_activity where wait_event = 'SyncRep'"
 ```
 
 `ANY 1 (*)` **cannot occur on a healthy cluster.** If you see it with backends in
@@ -49,9 +53,9 @@ the primary from silently accepting writes only one node holds.
 ## Fix — bring a standby back
 
 ```sh
-patronictl -c /etc/patroni/patroni.yml list        # which are down?
-systemctl status percona-patroni                   # on each standby
-systemctl start percona-patroni                    # on one that is down
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml list   # which are down?
+sudo systemctl status percona-patroni                          # on each standby
+sudo systemctl start percona-patroni                           # on one that is down
 ```
 
 **One standby is enough.** `synchronous_node_count` is 1. Writes resume the
@@ -59,9 +63,11 @@ moment a single standby is streaming again — you do not need both.
 
 Confirm:
 
-```sql
-SELECT application_name, sync_state FROM pg_stat_replication;   -- expect quorum
-SHOW synchronous_standby_names;                                 -- ANY 1 (pgX,pgY)
+```sh
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc \
+  "select application_name, sync_state from pg_stat_replication"   # expect quorum
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc "show synchronous_standby_names"
+# ANY 1 (pg2,pg3)  <- named members, not (*)
 ```
 
 ## If no standby can be brought back quickly
@@ -70,7 +76,7 @@ You are choosing between an outage and a durability gap. **Do not make this
 choice silently.**
 
 ```sh
-patronictl -c /etc/patroni/patroni.yml edit-config --force \
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml edit-config --force \
   -s synchronous_mode_strict=false
 ```
 
@@ -78,7 +84,7 @@ Writes resume immediately, held on **one disk only**, with no second copy. Recor
 that you did it, and set it back the moment a standby returns:
 
 ```sh
-patronictl -c /etc/patroni/patroni.yml edit-config --force \
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml edit-config --force \
   -s synchronous_mode_strict=true
 ```
 
@@ -107,9 +113,10 @@ state, reconstruction gets harder every minute.
 
 **Mark where you are now**, so the repair attempt is itself recoverable:
 
-```sql
-SELECT pg_create_restore_point('before_attempting_repair');
-SELECT pg_switch_wal();
+```sh
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc \
+  "select pg_create_restore_point('before_attempting_repair')"
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc "select pg_switch_wal()"
 ```
 
 The WAL switch is not optional. A restore point lives inside the *current*
@@ -132,8 +139,11 @@ not queryable.
 Restore a copy to a **separate path or host**, targeting just before the change:
 
 ```sh
-pgbackrest --stanza=<stanza> --type=name --target=<marker> \
-           --pg1-path=/var/lib/pgsql/restore restore
+# The stanza is the cluster name -- `lab1` or `lab2` here.
+# Restore somewhere with room that is NOT the live data directory. In Lab 2
+# /var/lib/pgsql is the LUKS volume holding production, so do not restore beneath it.
+sudo -u postgres pgbackrest --stanza=<cluster> --type=name --target=<marker> \
+     --pg1-path=/var/lib/pgsql-restore restore
 ```
 
 Then read the old values out of the restored copy and `UPDATE` production back.
@@ -156,9 +166,9 @@ why this is preferred over rewinding.
 Only when the damage cannot be reconstructed and the loss is acceptable.
 
 ```sh
-patronictl -c /etc/patroni/patroni.yml pause      # FIRST
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml pause   # FIRST
 # ... restore to the marker ...
-patronictl -c /etc/patroni/patroni.yml resume
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml resume
 ```
 
 - **Pause first**, or Patroni tries to repair the node you are deliberately
@@ -185,9 +195,9 @@ losing it. An off-host repository arrives in [Lab 3](lab3/README.md).
 but not driven by a single lab check.
 
 ```sh
-patronictl -c /etc/patroni/patroni.yml list
-systemctl status percona-patroni etcd
-journalctl -u percona-patroni -n 50 --no-pager
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml list
+sudo systemctl status percona-patroni etcd
+sudo journalctl -u percona-patroni -n 50 --no-pager
 ```
 
 Check in this order — each has been a real cause here:
@@ -195,13 +205,15 @@ Check in this order — each has been a real cause here:
 | Check | Why |
 | --- | --- |
 | `getenforce` | Permissive-vs-Enforcing drift was real in both labs |
-| Data directory mounted? `findmnt /var/lib/pgsql` | A service on the root filesystem will initialise an empty cluster over the mountpoint |
+| **Lab 2 only** — data directory mounted? `findmnt /var/lib/pgsql` | Lab 2 puts it on a LUKS volume, and a service started without it initialises an empty cluster over the mountpoint. **In Lab 1 the root filesystem is correct** — it has no separate volumes |
 | `systemctl is-active etcd` and endpoint health | No DCS, no membership |
 | Certificate expiry and SANs (Lab 2) | A rebuilt VM gets a new address; a stale IP SAN fails `verify-full` and reads like a cluster fault |
 | `journalctl` for `has already been bootstrapped` | etcd first-bootstrap wedge; see `lab2/PLAN.md` |
 | Timeline divergence | `check_timeline` is `true`, so a standby that cannot reach the new timeline refuses rather than diverging |
 
-Rebuilding the node from the primary is `patronictl reinit <cluster> <member>`.
+Rebuilding the node from the primary is
+`sudo -u postgres patronictl -c /etc/patroni/patroni.yml reinit <cluster> <member>`,
+where `<cluster>` is `lab1` or `lab2`.
 It discards that node's data directory — safe for a standby, never for the node
 holding data you have not got elsewhere.
 
