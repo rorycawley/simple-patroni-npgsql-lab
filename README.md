@@ -1,234 +1,242 @@
-# Patroni + Npgsql HA labs
+# Patroni + Npgsql: a PostgreSQL high-availability proof of concept
 
-A series of proof-of-concept labs in which a .NET client using the Npgsql driver
-talks to a Patroni-managed PostgreSQL cluster, and keeps working across the loss
-of the primary without losing an acknowledged transaction.
+A .NET application, using the Npgsql driver, talks to a three-node PostgreSQL
+cluster managed by Patroni. When the primary dies the cluster elects a new one,
+the application finds it without help from a proxy, and no transaction the
+database already acknowledged is lost along the way.
 
-Every lab builds from nothing with two commands and proves its claims with
-executable checks rather than prose.
+That sentence is the whole thesis. The repository exists to find out how much of
+it survives contact with a real cluster, one stage at a time.
 
-## What the series is for
+## What this repository is for
 
-Two outcomes, stated precisely, because both are easy to overclaim.
+It produces two things, and everything here serves one of them.
 
-**1. No acknowledged transaction is lost to infrastructure failure.** Quorum
-commit means a commit is not acknowledged until a second node holds it, so no
-node failure, promotion or fence can lose one; `synchronous_mode_strict` removes
-the one case where that guarantee used to lapse, in [both built labs](#durability). Page checksums catch corruption before it is replicated and copied into every backup.
-Backups and a rehearsed restore cover losing every node at once.
+| Deliverable | What it is | Where it lives | How far along |
+| --- | --- | --- | --- |
+| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 2 of 8 stages built, 1 in progress |
+| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 3 drilled, 6 reasoned, 1 stub |
 
-Two things sit outside that claim, deliberately:
+Each stage is a lab: a self-contained cluster that builds from nothing with two
+commands and tests its own claims with executable checks. The labs are the
+*evidence*. They are not the product, and they cannot be — they run on a single
+laptop, which is enough to show that a mechanism works and nowhere near enough to
+support an availability figure. The gap between the two is written down in
+[From lab to production](#from-lab-to-production), and closing that gap is the
+point of the exercise.
 
-- **In-flight work that was never acknowledged can be lost.** That is correct and
-  unavoidable. The client's job is to know that it does not know, which is why it
-  reports an uncertain commit rather than reissuing it.
-- **Recovering from a *logical* error costs data on purpose.** Rewinding to a
-  point before a bad migration discards every transaction committed after it.
-  That is the recovery mechanism rather than a defect, and
-  [Lab 6](lab6/README.md) measures the cost instead of hiding it — which is also
-  why the series keeps a logical dump alongside the physical backup, so a single
-  table can be restored before the whole cluster is rewound.
+## Status
 
-The guarantee is therefore about *infrastructure* failure. Against a mistake, the
-labs offer the cheapest instrument that works.
+| Lab | What it adds | Built? |
+| --- | --- | --- |
+| [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | **Built and verified** |
+| [2](lab2/README.md) | Every Lab 1 guarantee, now on LUKS2 volumes — PostgreSQL and etcd on separate devices — with TLS on every channel, mutual where the peer is a machine | **Built and verified** |
+| [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **In progress** — AC-1 to AC-5 met; the failover measurement remains |
+| [4](lab4/README.md) | Recovery from total loss: VMs, volumes and local secrets destroyed, then rebuilt onto fresh machines | Specified |
+| [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | Specified |
+| [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
+| [7](lab7/README.md) | Schema migration with Flyway — no downtime, and what survives a failover mid-migration | Specified |
+| [8](lab8/README.md) | Undoing a migration that succeeded and was wrong: by table, or by rewinding the cluster | Specified |
 
-**2. PostgreSQL stays available across the loss of any one node.** Automatic
-promotion, fencing so a partitioned primary cannot keep serving, and a client
-that finds the new primary by itself. Measured rather than asserted:
-[`SLA.md`](SLA.md) gives RPO and RTO per failure mode.
+Labs 3 to 8 are complete designs with acceptance criteria, written before
+building so the criteria cannot quietly reshape themselves around whatever
+happened. **They claim no results.**
 
-Its limits are equally explicit. Losing **two** of three nodes is read-only
-either way, because etcd quorum goes with them. And durability is chosen over
-availability where they conflict, so if every standby is unavailable the cluster
-blocks writes rather than accepting one it cannot make durable.
+The order is deliberate, and it answers *what would you most regret not having*
+at each point. Recoverability comes first, because a cluster you cannot restore
+is the worst thing to discover late (3, 4). Then the ability to see it, because
+`synchronous_mode_strict` deliberately created a failure that never heals itself
+and nothing yet detects it (5). Then the operation the team performs most often
+and is most likely to be hurt by (6). Schema migration comes last (7, 8): it
+matters, but it is the application's lifecycle rather than the platform's, and it
+is the only pair here that a customer could reasonably own themselves.
 
-## Where things are documented
+Lab 1 encrypts nothing on purpose — run it only on an isolated, trusted network.
+Lab 2 lifts that restriction. Lab 2 is a standalone *copy* of Lab 1 rather than a
+layer on top: either can be built, broken and destroyed without disturbing the
+other, and the diff between them is precisely what encryption cost.
 
-Each file below owns one subject and does not repeat another's — with one
-deliberate exception. The two `ansible/README.md` files overlap substantially,
-because Lab 2 is a standalone copy of Lab 1 rather than a layer on it, and making
-one link to the other would break the property that either lab can be built and
-destroyed without the other.
+## Start here
 
-| File | Owns |
+Pick the row that matches why you opened this.
+
+| You want to… | Read, in order |
 | --- | --- |
-| this file | What every lab shares: the components, the cluster design, the failover and durability semantics, and the prerequisites |
-| [`lab1/README.md`](lab1/README.md) | Lab 1 alone: its scope, acceptance criteria, how each is proven, and how to run it |
-| [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
-| [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
-| [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| [`lab3`](lab3/README.md) … [`lab7/README.md`](lab7/README.md) | Each of those labs' design and acceptance criteria — specified ahead of being built |
-| [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
-| [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
-| [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) | What each backup tool is for, when to use it, when not to, and what to do before a manual change |
-| [`RUNBOOKS.md`](RUNBOOKS.md) | What to do *during* an incident, each procedure marked verified, reasoned, or stub |
+| **Decide whether the design is sound** | this file → [`SLA.md`](SLA.md) → [`lab1/README.md`](lab1/README.md) |
+| **Run it yourself** | [Prerequisites](#prerequisites) → [`lab1/README.md`](lab1/README.md) → [`lab1/ansible/README.md`](lab1/ansible/README.md) |
+| **Operate the cluster** | [`RUNBOOKS.md`](RUNBOOKS.md) on its own — it is written to need nothing else |
+| **Understand the backup strategy** | [Backups](#backups-two-instruments-not-two-backup-systems) below → [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) |
 
-## The labs
+## What the labs prove
 
-| Lab | Adds | At rest | In transit | VMs |
-| --- | --- | --- | --- | --- |
-| [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | plaintext | plaintext | 3 |
-| [2](lab2/README.md) | Everything Lab 1 proves, on encrypted disks and an encrypted network | LUKS2, separate volumes for PostgreSQL and etcd | TLS on every channel, mutual where the peer is a machine | 4 |
-| [3](lab3/README.md) — specified, not built | Durable backups: pgBackRest **and** `pg_dump` to a MinIO repository, off the database hosts, encrypted and reached over TLS | — | — | — |
-| [4](lab4/README.md) — specified, not built | Recovery: total loss — VMs, volumes and local secrets destroyed — rebuilt onto fresh VMs from the repository alone | — | — | — |
-| [5](lab5/README.md) — specified, not built | Schema migration with Flyway: without downtime, and what survives a failover mid-migration | — | — | — |
-| [6](lab6/README.md) — specified, not built | Recovering from a bad migration: mark before migrating, then recover by table or rewind the cluster | — | — | — |
-| [7](lab7/README.md) — specified, not built | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | — | — | — |
+Two claims, both stated narrowly, because both are easy to inflate.
 
-Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
-network. Lab 2 removes that constraint.
+### 1. Infrastructure failure cannot lose an acknowledged transaction
 
-[Lab 3](lab3/README.md) takes two kinds of backup, and they do different jobs
-rather than duplicating each other. **pgBackRest is the disaster recovery
-system**: it copies the cluster byte for byte and archives WAL, so it can rebuild
-everything from nothing or wind the cluster back to a moment. **`pg_dump` is a
-scalpel and a canary** — it recovers a single table without disturbing anything
-else, and because it reads every row through PostgreSQL's own executor, a dump
-that completes is evidence the data is *readable* rather than merely present.
-That second job matters because **a physical backup faithfully backs up
-corruption and a logical dump cannot**.
+The cluster runs quorum commit, so a commit is not acknowledged until a second
+node has flushed it to disk. No crash, promotion or fence can therefore discard
+one — the surviving node already had it before the application was told anything.
+`synchronous_mode_strict` closes the one case where that used to lapse, and page
+checksums catch corrupted data before replication propagates it and the next
+backup preserves it faithfully. All of this is built and verified in Labs 1 and 2.
 
-Backup and recovery are then deliberately two labs rather than one. Lab 3 can
-finish green while proving nothing about recovery: a repository that accepts writes,
-passes `pgbackrest check` and reports a valid backup set is still only evidence
-that *taking* a backup works. A backup nobody has restored is an assumption, and
-separating the labs keeps it from being mistaken for a result.
+Two exclusions, both deliberate:
 
-[Lab 4](lab4/README.md) is where that assumption is tested, and it is a test of
-the dependency graph rather than of pgBackRest — which restores perfectly well
-and was never in doubt. It destroys the VMs, their volumes **and** the local
-secrets, then rebuilds onto fresh VMs, which asks the only interesting question:
-is anything required for recovery stored solely inside the thing that was lost?
-The cipher passphrase, the CA, the passwords and the procedure itself all have to
-survive somewhere the disaster did not reach.
+**Work that was never acknowledged may be lost.** This is correct behaviour and
+cannot be otherwise. What matters is that the application knows it does not know:
+the client reports an uncertain outcome instead of quietly reissuing the write
+and risking doing it twice.
 
-[Lab 5](lab5/README.md) covers schema migration, both ways it goes wrong: your
-migration interrupting your users, and the infrastructure interrupting your
-migration. The answer under test is that no downtime is needed — provided the
-schema stays compatible with both the current and previous application version,
-and every migration bounds its own lock wait. Compatibility is what makes an
-application rollback possible; taking downtime instead narrows the broken period
-but *forbids* rollback, because the old version can no longer run.
+**Undoing a mistake costs data by design.** Rewinding to a point before a bad
+migration throws away every transaction committed after it. That is how the
+recovery works, not a flaw in it, and [Lab 8](lab8/README.md) is built to measure
+the loss rather than gloss over it.
 
-Most of what people fear about a failover mid-migration cannot happen on
-PostgreSQL: transactional DDL lets Flyway write the migration and its history row
-in one transaction, and its advisory lock is session-scoped, so a killed primary
-releases it. The exception is sharp, and it is why these are one lab rather than
-two — `CREATE INDEX CONCURRENTLY` cannot run in a transaction, so an interrupted
-one leaves an `INVALID` index that a re-run will not clean up, and it is exactly
-the construct the zero-downtime half recommends. One instruction with a caveat,
-not two labs contradicting each other.
+So the guarantee covers *infrastructure* failure. Against human error the series
+offers the cheapest tool that does the job — which is why it keeps a logical dump
+next to the physical backup, so one table can come back without rewinding
+everything.
 
-[Lab 6](lab6/README.md) is the case every earlier lab is blind to. A bad
-migration is not a fault: nothing crashes, no node is lost, and the cluster stays
-perfectly healthy while doing the wrong thing. Worse, the machinery from Labs 1
-and 2 works *against* recovery — quorum commit makes the bad migration durable
-before it is acknowledged, replication carries it to both standbys in
-milliseconds, and failover just hands over a healthy node carrying the same
-broken schema. No node is left holding the old one. The only way back is the
-backup taken before the migration ran, restored to the moment before it started.
+### 2. The database survives losing any single node
 
-It also has a cost worth stating rather than discovering: rewinding to just
-before the migration discards every transaction committed after it. Lab 6 has to
-measure that window, not just prove the schema came back — which is why it holds
-two instruments rather than one. A targeted logical dump restores the tables the
-migration mangled and loses nothing else; full point-in-time recovery is the
-emergency brake, reached for only when the scalpel will not do.
+Patroni promotes a standby automatically, fences a primary that can no longer
+prove it holds the leader key, and the client locates the new primary unaided.
+These are measured, not asserted: [`SLA.md`](SLA.md) carries RPO and RTO for each
+failure mode.
 
-The protection is narrower than it first sounds. Transactional DDL means a
-migration that *crashes* rolls back by itself, so what needs recovering is one
-that succeeded and was wrong.
+The boundaries are just as firm. Lose **two** of three nodes and the cluster is
+read-only regardless, because etcd quorum went with them. And where durability
+and availability conflict, durability wins: with no standby able to confirm a
+write, the cluster blocks rather than accepting something it cannot make durable.
 
-[Lab 7](lab7/README.md) is monitoring, and it is the easiest lab here to fake —
-a green dashboard proves a dashboard renders, and a broken alerting pipeline
-looks exactly like a quiet night. What makes it testable is that the earlier
-labs can already break things on purpose, so the criterion becomes: every fault
-they inject must raise its own alert within a measured time, and a healthy
-cluster must raise none. It matters most for the two failures that do **not**
-heal themselves — writes blocked on synchronous replication, and backups that
-have quietly stopped — because neither raises an error and both are otherwise
-found only when it is too late.
+## Backups: two instruments, not two backup systems
 
-Lab 2 is a standalone copy of Lab 1, not a layer on top of it. The duplication is
-intentional: either lab can be built, broken and destroyed without touching the
-other, and the diff between them is exactly what encryption cost.
+[Lab 3](lab3/README.md) sets up pgBackRest **and** `pg_dump`. They are not
+redundant, and neither is a fallback for the other. The distinction comes down to
+one thing: **pgBackRest copies files, `pg_dump` copies data.**
 
-## Components
+| | pgBackRest — physical | `pg_dump` — logical |
+| --- | --- | --- |
+| Recovers | The entire cluster | One table, schema or database |
+| Point-in-time recovery | Yes, by replaying WAL | No — one instant per run |
+| What using it costs | Everything committed after the target is discarded | Nothing else is disturbed |
+| Survives a major-version change | **No**, it is version-locked | Yes |
+| Reads through the SQL layer | No | **Yes** |
 
-| Component | Role |
+**pgBackRest is the disaster recovery system.** It copies the cluster byte for
+byte and archives WAL continuously, so it can rebuild from nothing or wind back
+to a chosen moment. If only one of the two could exist, it would be this one.
+
+**`pg_dump` is a scalpel and a canary.** It restores a single table without
+touching anything else — recovering one mangled table from a physical backup
+means rewinding the whole cluster and discarding a day of unrelated work. And
+because it reads every row through PostgreSQL's own executor, a dump that
+finishes is evidence the data is *readable* rather than merely present. That
+second job matters more than it sounds: **a physical backup faithfully preserves
+corruption, and a logical dump cannot.** A corrupt page is copied byte for byte
+into every backup and restored exactly; `pg_dump` hits the same page and fails,
+which is the alarm you want.
+
+The full treatment — when *not* to use each, what neither protects against, and
+what to do before a manual change — is in
+[`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md).
+
+**Taking backups and restoring them are two labs on purpose.** Lab 3 can finish
+green while proving nothing about recovery: a repository that accepts writes,
+passes `pgbackrest check` and reports a valid backup set has only demonstrated
+that *taking* a backup works. A backup nobody has restored is a hypothesis, and
+[Lab 4](lab4/README.md) is where it gets tested — against fresh VMs, with the
+local secrets destroyed too, because the real question is not whether pgBackRest
+can restore but whether anything needed for recovery was stored only inside the
+thing that was lost.
+
+## From lab to production
+
+The labs establish mechanisms on one laptop. This is what a production build
+needs that they do not have — the list this proof of concept exists to produce.
+
+| Area | What the labs do | What production needs |
+| --- | --- | --- |
+| **Fault domains** | Three VMs on one machine | Three independent domains. No single domain may hold two of the three nodes — [`SLA.md`](SLA.md#fault-domains-must-the-nodes-be-on-separate-hypervisors) |
+| **Fencing** | `softdog`, a kernel timer | A hardware or hypervisor watchdog. `softdog` cannot fire during a kernel panic, because the timer that would fire it has stopped too |
+| **Backup repository** | Local to each node in Labs 1–2; a single MinIO in Lab 3 | Off-host, and a second repository. One repository is a single point of failure for every recovery you might ever attempt |
+| **Restore** | Not yet rehearsed — [Lab 4](lab4/README.md) is unbuilt | A restore rehearsed on a schedule, not on the day it is needed |
+| **Secrets** | Generated into an uncommitted `.secrets/`; superuser and replication passwords sit in cleartext in `patroni.yml` | A secrets manager, with each workload fetching at start — [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) |
+| **PKI** | A private CA issuing certificates at build time | Issuance, rotation, revocation, and expiry monitoring. Expiry is the one outage that is entirely preventable by watching a number |
+| **Disk encryption keys** | A root-only keyfile on the node itself | KMS, TPM or network-bound unlock. Today a stolen *disk* is safe and a stolen *node* is not |
+| **Client failover** | Npgsql's `Target Session Attributes=primary` | The same capability in every language in the estate, or a proxy tier. Putting failover in the client obliges every client to honour it |
+| **Monitoring** | None — [Lab 5](lab5/README.md) is unbuilt | Detection for the two failures that never heal themselves: writes blocked on synchronous replication, and backups that quietly stopped |
+| **Patching and upgrades** | Designed but unbuilt — [Lab 6](lab6/README.md) | A rehearsed rolling procedure for PostgreSQL minor versions, Patroni, etcd and the OS. The operation the team performs most often, and the one this cluster's own constraints make easiest to get wrong |
+| **Break-glass** | Not implemented | A named, audited `operator` identity, with an offline copy that works when the identity provider does not |
+
+## The cluster
+
+Three nodes. Each runs PostgreSQL, Patroni, and one member of the etcd cluster.
+
+| Component | What it does here |
 | --- | --- |
-| Npgsql | .NET PostgreSQL driver. It connects directly to the configured hosts, selects the current primary for writes, and provides connection pooling. |
-| Patroni | Manages the PostgreSQL instances, records cluster state in etcd, and orchestrates promotion and failover. It also maintains `synchronous_standby_names` for quorum commit, so only a standby known to be caught up is eligible for promotion. |
-| etcd | Distributed configuration store that holds Patroni cluster state and elects a single leader through quorum. |
-| Linux watchdog (`softdog`) | Armed by Patroni on the leader only, and petted on every successful leader-key renewal. If renewals stop, it resets the node at `ttl - safety_margin`, fencing it so a promoted replica cannot end up alongside a still-writable old primary. |
-| pgBackRest | PostgreSQL backup, WAL archiving and restore. It supports disaster recovery, not automatic failover, and is not on the failover path. |
+| Npgsql | The .NET driver. Given several hosts it works out which is the primary, routes writes there, and pools the connections |
+| Patroni | Supervises each PostgreSQL instance, keeps cluster state in etcd, and runs promotions. It also maintains `synchronous_standby_names`, so only a standby known to be caught up can be promoted |
+| etcd | The distributed store holding that state, agreeing on a single leader through quorum |
+| Linux watchdog (`softdog`) | Armed by Patroni on the leader alone and petted whenever a leader-key renewal succeeds. When renewals stop it resets the node at `ttl - safety_margin`, so a promoted replica can never find the old primary still taking writes |
+| pgBackRest | Backups, WAL archiving and restore. It serves disaster recovery, sits nowhere near the failover path, and is not involved in promotion |
 
-## Cluster design
+**No HAProxy, VIP, Keepalived or PgBouncer.** The client is given all three
+addresses and uses Npgsql's `Target Session Attributes=primary`, which makes the
+driver responsible for finding the primary. That is the experiment: it moves the
+burden of failover into the application, where these labs can then check whether
+it is carried correctly. It is also the decision with the widest blast radius for
+anyone adopting this — see the client-failover row above.
 
-Three nodes, each running PostgreSQL, Patroni, and one member of the etcd
-cluster. Patroni uses the Linux software watchdog through `/dev/watchdog` for
-fencing.
+Page checksums are switched on at `initdb` time and asserted by `verify_cluster`.
+They turn silent corruption into a reported error before replication spreads it
+and the backups preserve it. They also cannot be enabled later without rebuilding
+the cluster, which is why a default that nothing checks is worth checking.
 
-There is no HAProxy, VIP, Keepalived or PgBouncer. The client connects directly
-to all three nodes and uses Npgsql's `Target Session Attributes=primary`, so the
-driver — not a proxy — is what finds the current primary. That is the point of
-the exercise: it puts the failover burden on the application, where these labs
-can then measure whether it is carried correctly.
+The application authenticates as `app_runtime`, a non-superuser login restricted
+by a narrow `pg_hba` rule scoped to the client network and `scram-sha-256`. Every
+build generates fresh passwords into an uncommitted `.secrets/` directory.
 
-Page checksums are enabled at `initdb` time on every lab, and `verify_cluster`
-asserts it. They are what turns silent corruption into a detected error before it
-is replicated to both standbys and copied faithfully into every backup — and they
-cannot be added later without rebuilding the cluster, which is why a default
-nothing checks is worth checking.
+### What happens when the primary is lost
 
-Authentication is a least-privilege, non-superuser `app_runtime` login,
-permitted by a narrow `pg_hba` rule scoped to the client network and
-`scram-sha-256`. Passwords are generated per build into an uncommitted
-`.secrets/` directory.
+| Fault | What Patroni does | Time to a writable primary |
+| --- | --- | --- |
+| PostgreSQL crashes, Patroni survives | Normally it restarts PostgreSQL locally, failing over only if recovery exceeds `primary_start_timeout`. These labs set that to `0`, so the leader key goes straight to a healthy replica | ~10–25s |
+| The whole node disappears | Nothing releases the leader key, so a replica must wait for it to expire — `ttl` is 30s. The two surviving etcd members keep quorum as long as they can still reach each other | ~40–75s |
 
-## Failover behaviour
+In both cases, connections to the old primary drop and new ones fail until a
+replica is promoted. **Npgsql will not retry a command on another host by
+itself.** The application has to notice the failure, open a fresh primary
+connection, and reissue only what is safe to reissue.
 
-Common to every lab:
+That final clause is the difficult part, and it is why these labs exercise the
+client rather than only the cluster. A dropped connection can leave an
+application genuinely unable to tell whether its transaction committed, and a
+blind retry then risks performing the work twice.
 
-- **PostgreSQL dies, Patroni survives.** Patroni normally restarts it locally and
-  only fails over if it does not recover within `primary_start_timeout`. These
-  labs set that to `0`, so a crash hands the leader key to a healthy replica
-  immediately.
-- **The whole node is lost.** Nothing releases the leader key, so a replica can
-  only promote once the key's `ttl` (30s) expires. The remaining two etcd members
-  keep quorum, provided they can still reach each other.
-- **In both cases**, connections to the old primary are lost and new ones fail
-  until a replica is promoted. Npgsql does not retry commands on another host by
-  itself. The client must handle the connection failure, open a new primary
-  connection, and reissue only operations that are safe to reissue.
+### Durability, and what it costs
 
-That last clause is the hard part, and it is why the labs test the client and not
-just the cluster: a connection loss can leave the application unable to tell
-whether its transaction committed, so a blind retry risks doing the work twice.
+Both built labs run **quorum commit** — `synchronous_mode: quorum` with
+`synchronous_node_count: 1` — which has Patroni maintain
+`synchronous_standby_names = ANY 1 (...)`. A commit waits until a standby has
+flushed it, and because Patroni tracks the eligible set in etcd, only a node
+known to be current can be promoted.
 
-## Durability
+**These labs choose durability over availability every time**, so
+`synchronous_mode_strict` is on. Patroni then refuses to clear
+`synchronous_standby_names` when nothing can confirm a flush, and commits block
+instead of completing on a single disk. The price is explicit: with every standby
+unavailable, writes stop until one comes back.
 
-Both labs run **quorum commit**: `synchronous_mode: quorum` with
-`synchronous_node_count: 1`, which makes Patroni maintain
-`synchronous_standby_names = ANY 1 (...)`. A commit is not acknowledged until a
-standby has flushed it, and Patroni tracks the eligible set in the DCS, so only a
-node known to be caught up can be promoted. An acknowledged transaction therefore
-cannot be lost in a failover.
+Two obligations follow, and neither is optional. Clients need a command timeout,
+because a blocked commit hangs rather than failing quickly. And rolling
+maintenance must never remove both standbys at once. The reasoning is in
+[`SLA.md`](SLA.md#the-exception-being-closed); recognising and clearing the
+blocked state is
+[runbook 1](RUNBOOKS.md#1-writes-are-blocked-on-synchronous-replication).
 
-**The labs favour durability over availability, without exception**, so
-`synchronous_mode_strict` is enabled. Patroni will not clear
-`synchronous_standby_names` when no standby can confirm, so a commit blocks
-rather than completing on a single node. The accepted cost is that with every
-standby unavailable, writes stop until one returns.
-
-Two conditions follow from that and are not optional: clients need a command
-timeout, because a blocked commit hangs rather than failing fast, and rolling
-maintenance must never take both standbys out at once. The reasoning is in
-[`SLA.md`](SLA.md#the-exception-being-closed).
-
-> **Status: implemented and verified in both labs.** `make test_sync` includes a
-> mutation test that runs the same fault with the setting on and off and requires
-> opposite outcomes:
+> **Verified in both built labs.** `make test_sync` runs one fault twice, with
+> the setting on and then off, and demands opposite outcomes:
 >
 > ```text
 > strict ON    synchronous_standby_names 'ANY 1 (*)'   SyncRep   commit blocked
@@ -237,14 +245,14 @@ maintenance must never take both standbys out at once. The reasoning is in
 
 ## Prerequisites
 
-Both labs need Lima, Ansible, `jq`, and the .NET 10 SDK on the host machine.
+You need Lima, Ansible, `jq`, and the .NET 10 SDK on the host.
 
-The VMs use Lima's
+The VMs sit on Lima's
 [`socket_vmnet` managed network](https://lima-vm.io/docs/config/network/vmnet/),
-which provides addresses reachable from both macOS and the other VMs — etcd and
-streaming replication both require this. Install `socket_vmnet` in the
-root-owned location and configure Lima's sudoers file as Lima describes, then
-confirm it with:
+which hands out addresses reachable both from macOS and between the guests —
+etcd and streaming replication each require that. Install `socket_vmnet` into the
+root-owned location, set up Lima's sudoers file as its documentation describes,
+and check the result:
 
 ```sh
 limactl sudoers --check
@@ -252,7 +260,7 @@ limactl sudoers --check
 
 ## Running a lab
 
-Both labs work the same way, from inside `lab1/` or `lab2/`:
+Both built labs behave identically. From inside `lab1/` or `lab2/`:
 
 ```sh
 make all      # build the cluster, run every check, print one summary
@@ -261,14 +269,35 @@ make check    # re-run the checks against a cluster that is already up
 make          # list the targets; it builds nothing, because `all` injects faults
 ```
 
-The setup phases stop the run if they fail, since there would be nothing to
-test. The checks all run even after one fails, so a single invocation reports
-everything that is broken rather than only the first thing, and the command exits
-non-zero if any check failed.
+A failing setup phase halts the run, since there would be nothing left to test.
+The checks behave the opposite way: all of them run even after one fails, so a
+single invocation tells you everything that is broken instead of only the first
+thing. The command exits non-zero if any check failed.
 
-Every check after the first connection test deliberately breaks the running
-cluster — force-stopping a VM, killing PostgreSQL, freezing Patroni until the
-watchdog reboots the node, or cutting a node off from etcd. Each scenario repairs
-what it broke and waits for one leader and two streaming replicas before
-reporting `PASS`, so the checks can run in any order against a healthy cluster.
-Expect the primary to move between nodes.
+Every check after the initial connection test breaks the running cluster on
+purpose — force-stopping a VM, killing PostgreSQL outright, freezing Patroni
+until the watchdog reboots the node, severing a node from etcd, or pausing
+Patroni to confirm the runbook catches it. Each one repairs the damage and waits
+for one leader with two streaming replicas before reporting `PASS`, so they can
+run in any order against a healthy cluster. Expect the primary to move between
+nodes as they go.
+
+## Where everything is documented
+
+One subject per file, with no file repeating another.
+
+| File | Covers |
+| --- | --- |
+| this file | Why the series exists, what its stages share, and what production still requires |
+| [`RUNBOOKS.md`](RUNBOOKS.md) | What to do while an incident is happening, each procedure marked drilled, reasoned or stub |
+| [`SLA.md`](SLA.md) | RPO, RTO and availability per failure mode, and where those numbers come from |
+| [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, what each may do, and which lab introduces it |
+| [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) | The two backup tools in full: when to use each, when not to, and what to take before a manual change |
+| [`lab1/README.md`](lab1/README.md), [`lab2/README.md`](lab2/README.md) | That lab alone — its scope, its acceptance criteria, how each is proven, and how to run it |
+| [`lab3`](lab3/README.md) … [`lab8/README.md`](lab8/README.md) | The design and acceptance criteria for each unbuilt stage |
+| [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md), [`lab3/ansible/README.md`](lab3/ansible/README.md) | How that lab's automation installs and configures the nodes, and the network policy it applies |
+| [`lab2/PLAN.md`](lab2/PLAN.md), [`lab3/PLAN.md`](lab3/PLAN.md) | How that lab is built rather than what it must prove: the phases, their order, the risks worth watching, and what carries into the next lab |
+
+There is one intentional exception: the two `ansible/README.md` files overlap
+heavily. Lab 2 is a standalone copy of Lab 1, and pointing one at the other would
+destroy the property that either lab builds and tears down independently.

@@ -3,6 +3,12 @@
 They are not two backup systems, and one is not a spare for the other. They copy
 different things, and everything else follows from that.
 
+This file is the reference: the complete case, including when *not* to reach for
+each, what neither protects against, and what to take before a manual change.
+[The root README](README.md#backups-two-instruments-not-two-backup-systems)
+carries the summary; [Lab 3](lab3/README.md) covers how both are configured,
+stored and encrypted.
+
 ## The one-sentence difference
 
 **pgBackRest copies files. `pg_dump` copies data.**
@@ -31,25 +37,77 @@ not read it by hand, and you do not put your own files in it.
 **`pg_dump`** produces *one file per run*, containing the schema and data of **one
 database** as either SQL text or a portable archive.
 
-## When to use pgBackRest
+## The kinds of backup
 
-| Situation | Why |
+pgBackRest takes three, and they differ only in *what they copy*:
+
+| Type | Copies | Depends on |
+| --- | --- | --- |
+| **Full** | Every file in the cluster | Nothing — it stands on its own |
+| **Differential** | Files changed since the last **full** | That full |
+| **Incremental** | Files changed since the last backup **of any type** | Every backup in the chain back to the full |
+
+The trade runs in one direction: the cheaper a backup is to *take*, the longer
+the chain needed to *restore* it. A full is slow and self-sufficient; an
+incremental is fast and useless alone. **One damaged or expired link invalidates
+every backup after it**, which is why retention is expressed in fulls —
+`repo1-retention-full=2` here — and why expiring a full silently expires the
+differentials and incrementals that depend on it.
+
+### WAL archiving is the part that actually bounds data loss
+
+It is not a fourth backup type. It is continuous, it runs between backups, and it
+is what makes point-in-time recovery possible at all. This cluster archives with
+`archive_mode = on` and `archive_timeout = 60s`, pushing each segment through
+`pgbackrest archive-push`.
+
+The consequence is the most commonly conflated point in backup design:
+
+> **Backup frequency does not set your RPO. The WAL archive does.**
+
+Taking a full backup once a day does not mean losing up to a day. It means losing
+up to `archive_timeout`, *provided the WAL archive between the backup and the
+failure is intact*. The backup is the floor you replay from; the WAL is what gets
+you from there to the last moment before the incident. Lose the archive and the
+backup alone drops you back to whenever it was taken.
+
+### What Labs 1 and 2 actually do today
+
+Worth stating plainly, because the configuration looks complete and is not.
+Archiving is fully set up — `archive_command` pushes every segment, the stanza is
+created at bootstrap, and `pgbackrest check` runs in `verify_cluster` and passes.
+
+**But no backup is ever taken.** Nothing schedules a full, and `pgbackrest check`
+does not need one to pass. So these labs archive WAL continuously with no base
+backup for it to be replayed onto, which restores nothing. A second consequence
+follows: with no full backup, `repo1-retention-full=2` never expires anything, so
+the archive grows without bound — the beginning of
+[runbook 6](RUNBOOKS.md#6-disk-filling-or-wal-accumulating).
+
+Scheduled fulls and incrementals, retention that actually runs, and a repository
+that survives the node arrive in [Lab 3](lab3/README.md). Until then the honest
+description is *WAL archiving is proven to work; backup is not yet configured*.
+
+### `pg_dump` has no equivalent
+
+There is no incremental dump. Every run is standalone and complete, with no
+chain, no dependencies, and nothing to invalidate. That is the same distinction
+as everywhere else in this file: it copies data rather than files, and "which
+files changed" is not a question it can ask.
+
+## Which one to use
+
+| Use **pgBackRest** for… | Use **`pg_dump`** for… |
 | --- | --- |
-| A node, or every node, has been lost | It rebuilds the whole cluster |
-| You need the state as of 14:32 yesterday | Only WAL replay can do this |
-| You need to undo a change that has been replicated everywhere | PITR to just before it |
-| The database is large | It is the only one of the two that stays practical |
-| You want a new replica without loading the primary | Patroni can build one straight from the repository |
+| **A node, or every node, lost.** It rebuilds the whole cluster | **One table mangled, everything else fine.** It restores that table alone, losing nothing else |
+| **The state as of 14:32 yesterday.** Only WAL replay reaches a specific moment | **Knowing the data is still *readable*.** It reads every row; completing is the proof |
+| **Undoing a change that replicated everywhere.** PITR to just before it | **Moving to a new major version or another platform.** A physical backup cannot cross versions |
+| **A large database.** It is the only one of the two that stays practical | **A copy to load into a test environment.** Portable, selective, no cluster required |
+| **A new replica without loading the primary.** Patroni builds one straight from the repository | **Inspecting what was backed up.** Plain format is text you can actually read |
 
-## When to use `pg_dump`
-
-| Situation | Why |
-| --- | --- |
-| One table was mangled and everything else is fine | Restores that table alone, losing nothing else |
-| You want to know the data is still *readable* | It reads every row; completing is the proof |
-| You are moving to a new major version or another platform | The physical backup cannot cross versions |
-| You want a copy to load into a test environment | Portable, selective, no cluster required |
-| You want to inspect what was backed up | Plain format is text you can actually read |
+Read down a column, not across: the rows are two independent lists, not pairs.
+The division is not about size or importance — it is about whether you need the
+*cluster* back or the *data* back.
 
 ## When **not** to use each
 
@@ -98,6 +156,19 @@ real answer, but an expensive one, and it is the reason to keep the scalpel.
 pgBackRest. It is the disaster recovery system. `pg_dump` is what makes the
 common, small disasters cheap to fix.
 
+**Do we ever actually use `pg_dump`?**
+Yes — in three places, none of which is disaster recovery:
+
+| When | What for | Specified in |
+| --- | --- | --- |
+| On a schedule, slower than the pgBackRest cycle | The canary. A dump that completes is evidence the data is still readable | [Lab 3](lab3/README.md), AC-2 |
+| Before a destructive manual change — `DROP TABLE`, `DROP COLUMN` | A targeted dump of only those tables, so the change stays reversible | [When a transaction is not enough](#when-a-transaction-is-not-enough) |
+| After a migration that succeeded and was wrong | Restoring the affected tables without rewinding the whole cluster | [Lab 8](lab8/README.md), AC-3 |
+
+It is never the mechanism for recovering the cluster, and never used for
+point-in-time recovery. Note that all three are *specified*, not yet built — as
+above, neither tool is scheduled in Labs 1 and 2.
+
 **Why is "it copies corruption" such a big deal?**
 Because it is silent. A corrupt page is copied byte for byte into every backup,
 so the corruption outlives its retention window and every restore reproduces it
@@ -118,6 +189,11 @@ No. It is a hypothesis. That is why restoring is
 
 Usually **no** — and reaching for a backup first is often a sign the change is
 about to be made the risky way.
+
+This section is the *before*. If a change has already been committed and turned
+out to be wrong,
+[runbook 9](RUNBOOKS.md#9-undo-a-change-that-was-committed-and-later-found-to-be-wrong)
+is the *after*.
 
 ### The cheapest protection is not a backup
 
@@ -183,14 +259,16 @@ archived.
 Treat the restore point as the emergency brake. Using it rewinds the whole
 cluster and discards everything committed since, so for one mangled table the
 targeted dump is the better instrument — the same escalation
-[Lab 6](lab6/README.md) has to measure.
+[Lab 8](lab8/README.md) has to measure.
 
 ### Two things specific to this cluster
 
 - **Under `synchronous_mode_strict`, a manual change blocks** if no standby can
   confirm it. That is the [intended trade](SLA.md#the-exception-being-closed), but
   at a `psql` prompt it presents as a hang rather than an error. Check the cluster
-  is healthy before starting.
+  is healthy before starting, and if it does hang,
+  [runbook 1](RUNBOOKS.md#1-writes-are-blocked-on-synchronous-replication) is how
+  to recognise and clear it.
 - **Point-in-time recovery is not fully available yet.** Labs 1 and 2 keep
   pgBackRest repositories locally on each node, which is explicitly not a durable
   design. For recovering from a *mistake* that is adequate — the node is still
@@ -208,15 +286,24 @@ Worth stating, because both are easily assumed to cover it:
 - **A logical error you do not notice in time.** If the mistake predates every
   backup and WAL segment you still hold, there is nothing to go back to.
 - **Backups that stop silently.** Nothing throws an error when a backup simply
-  stops happening, which is why the [monitoring lab](lab7/README.md) treats
+  stops happening, which is why the [monitoring lab](lab5/README.md) treats
   *backup age* as its headline metric rather than any error count.
 
+The first two are rows in
+[what production still needs](README.md#from-lab-to-production): a second
+repository, so one loss is not total; and a passphrase held somewhere that losing
+the cluster cannot take with it.
+
 ## In these labs
+
+This is the designed arrangement, and **none of it is built yet** — Labs 3, 4 and
+6 are specified only. What exists today is a pgBackRest repository local to each
+node, which demonstrates the configuration and survives nothing.
 
 | | pgBackRest | `pg_dump` |
 | --- | --- | --- |
 | Set up in | [Lab 3](lab3/README.md) | [Lab 3](lab3/README.md) |
-| Restore proven in | [Lab 4](lab4/README.md) | [Lab 6](lab6/README.md) |
+| Restore proven in | [Lab 4](lab4/README.md) | [Lab 8](lab8/README.md) |
 | Stored at | `s3://…/pgbackrest/` | `s3://…/dumps/` |
 | Encrypted by | `repo1-cipher-pass` | its own passphrase, applied before upload |
 

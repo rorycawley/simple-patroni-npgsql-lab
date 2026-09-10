@@ -1,10 +1,10 @@
-# Lab 6: recovering from a bad migration
+# Lab 8: recovering from a bad migration
 
 > **Status: specified, not built.** Everything below is the design and its
 > acceptance criteria. No results are claimed.
 
 The shared components, cluster design and prerequisites are in the
-[top-level README](../README.md). This file covers Lab 6 only.
+[top-level README](../README.md). This file covers Lab 8 only.
 
 ## Goal
 
@@ -22,7 +22,7 @@ to both standbys in milliseconds, and a failover hands over a healthy node
 carrying the same broken schema. **No node is left holding the old state.** Every
 guarantee the earlier labs worked to establish is what removes the escape route.
 
-Only a backup answers it, which is why it composes Labs 3 to 5 rather than
+Only a backup answers it, which is why it composes Labs 3, 4 and 7 rather than
 repeating them.
 
 ## What is actually being protected against
@@ -102,7 +102,7 @@ two mangled tables.
 
 ### AC-2 is the point of the lab
 
-It asserts a *negative*: that everything built in Labs 1, 2 and 8 stays quiet.
+It asserts a *negative*: that everything built in Labs 1, 2 and 5 stays quiet.
 Green health checks, no promotion, no alert — and the corruption faithfully
 replicated to both standbys. Until that is demonstrated, the case for this lab is
 theoretical.

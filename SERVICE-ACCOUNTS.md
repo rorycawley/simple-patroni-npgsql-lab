@@ -23,10 +23,10 @@ becomes an outage nobody can log in to fix.
 
 | Identity | Why it belongs there |
 | --- | --- |
-| Grafana login (Lab 7) | Roles and teams map from groups, so dashboard access follows joiner/mover/leaver instead of a local user table |
+| Grafana login (Lab 5) | Roles and teams map from groups, so dashboard access follows joiner/mover/leaver instead of a local user table |
 | Human access to OpenBao | Operators authenticate as themselves rather than sharing a static token — which is what makes the audit trail mean anything |
 | Human `psql` sessions | PostgreSQL 18 added OAuth 2.0 (`OAUTHBEARER`), so this is newly possible. Confirm against the Percona 18 build first: server-side validation needs a validator library that not every build ships |
-| The CI/CD pipeline (Lab 5) | The pipeline proves who it is to Keycloak, then draws a short-lived `migrator` credential from OpenBao |
+| The CI/CD pipeline (Lab 7) | The pipeline proves who it is to Keycloak, then draws a short-lived `migrator` credential from OpenBao |
 
 Note what the last row does *not* do: Keycloak authenticates the pipeline, but
 the database connection is still SCRAM. Keycloak is never in the connection path.
@@ -109,7 +109,7 @@ using a secrets manager here at all.
 
 ### The collectors should not share it
 
-For Lab 7 the separation is available and worth taking. `postgres_exporter`
+For Lab 5 the separation is available and worth taking. `postgres_exporter`
 connects as the `monitoring` *database* role and has no reason to be the
 `postgres` *OS* user.
 
@@ -133,10 +133,10 @@ CA, extended" decision rather than a new trust root.
 | `replicator` | Lab 1 | Streaming replication | no |
 | `rewind` | Lab 1 | `pg_rewind` when a demoted primary rejoins | no |
 | `app_runtime` | Lab 1 | The .NET client | no |
-| `migrator` | Lab 5 | Flyway schema migrations | no |
+| `migrator` | Lab 7 | Flyway schema migrations | no |
 | `pgbackrest` | Lab 3 | Backups | no |
 | `dumper` | any | Logical dumps | no |
-| `monitoring` | Lab 7 | `postgres_exporter` | no |
+| `monitoring` | Lab 5 | `postgres_exporter` | no |
 | `operator` | any | Break-glass intervention | yes |
 
 ### The separation that matters most
@@ -237,7 +237,7 @@ GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text)  TO pgbackres
 | MinIO access key and secret | Lab 3 | Repository access |
 | **pgBackRest `repo1-cipher-pass`** | Lab 3 | See below |
 | Dump encryption passphrase | Lab 3 | `pg_dump` output is written outside the pgBackRest repository, so `repo1-cipher-pass` does not cover it. Without its own passphrase the dumps sit in the bucket in plaintext |
-| Grafana admin, Alloy → Loki/Mimir credentials | Lab 7 | |
+| Grafana admin, Alloy → Loki/Mimir credentials | Lab 5 | |
 
 ## Three risks worth stating
 

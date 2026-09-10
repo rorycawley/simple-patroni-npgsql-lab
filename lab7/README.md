@@ -1,10 +1,10 @@
-# Lab 5: schema migration
+# Lab 7: schema migration
 
 > **Status: specified, not built.** Everything below is the design and its
 > acceptance criteria. No results are claimed.
 
 The shared components, cluster design and prerequisites are in the
-[top-level README](../README.md). This file covers Lab 5 only.
+[top-level README](../README.md). This file covers Lab 7 only.
 
 ## Goal
 
@@ -97,7 +97,7 @@ depends on which tool triggers the run.
 | Additive migrations with the client committing throughout | Blue/green or canary deployment of the application |
 | Expand-contract for a destructive change, across simulated releases | Online schema-change tooling (`pg_repack`, `pgroll`) |
 | `lock_timeout` as the bound on blast radius | Logical-replication-based migration |
-| Failover injected *during* a migration, transactional and not | Recovering from a migration that was *wrong* — [Lab 6](../lab6/README.md) |
+| Failover injected *during* a migration, transactional and not | Recovering from a migration that was *wrong* — [Lab 8](../lab8/README.md) |
 | A deploy gate that refuses a degraded cluster | Multi-tenant or sharded schemas |
 
 ## Topology
@@ -107,9 +107,9 @@ application.
 
 | VM | Role |
 | --- | --- |
-| `lab5-pg1/2/3` | PostgreSQL, Patroni, etcd |
-| `lab5-app1` | The .NET client, `v1` and `v2` |
-| `lab5-flyway1` | Flyway |
+| `lab7-pg1/2/3` | PostgreSQL, Patroni, etcd |
+| `lab7-app1` | The .NET client, `v1` and `v2` |
+| `lab7-flyway1` | Flyway |
 
 Flyway is deliberately not on the application host. They are different actors
 with different credentials — `migrator` versus `app_runtime`, per

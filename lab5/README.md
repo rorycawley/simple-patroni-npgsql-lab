@@ -1,10 +1,10 @@
-# Lab 7: monitoring with Grafana LGTM
+# Lab 5: monitoring with Grafana LGTM
 
 > **Status: specified, not built.** Everything below is the design and its
 > acceptance criteria. No results are claimed.
 
 The shared components, cluster design and prerequisites are in the
-[top-level README](../README.md). This file covers Lab 7 only.
+[top-level README](../README.md). This file covers Lab 5 only.
 
 ## Goal
 
@@ -98,7 +98,7 @@ kernel journal.
 One limitation is worth testing rather than assuming. A softdog reset kills the
 node abruptly, so the last seconds of log may never be shipped. Whether a
 watchdog reset can be explained *after the fact* is a real question about this
-design, and Lab 7 should answer it honestly rather than assume the logs are there.
+design, and Lab 5 should answer it honestly rather than assume the logs are there.
 
 ## Topology
 
@@ -136,7 +136,7 @@ time. For self-healing faults that is fine. For the two failures above it is
 half the answer: their real RTO is *detect + decide + act*, and only the last
 part is currently measured.
 
-Lab 7's output is therefore a detection-latency column in `SLA.md`, which is what
+Lab 5's output is therefore a detection-latency column in `SLA.md`, which is what
 makes it a measurement rather than a dashboard exercise.
 
 ## Open decisions
