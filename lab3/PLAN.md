@@ -87,7 +87,8 @@ ceremony, not evidence.
 | **P0** | `make all` | The one full run. It establishes the baseline that a later regression is attributed against — without it, a P2 failure is indistinguishable from a bad fork |
 | **P2** | `make all` | It rewrites `archive_command`, which runs on the primary's commit path. A repository that blocks or hangs is an availability regression, so the whole suite earns its time here |
 | **P3** | `configure_cluster`, `verify_cluster`, its own checks, **plus `test_failover_vm`** | The leader gate must survive a promotion — AC-1 requires the *new* leader to take the next backup, and only a failover shows that |
-| **P1, P4, P5, P6** | `configure_cluster`, `verify_cluster`, plus that phase's own checks | None of them touch the write path. An object store, a retention policy and a dump job cannot break failover |
+| **P1, P4, P5** | `configure_cluster`, `verify_cluster`, plus that phase's own checks | None of them touch the write path. An object store, a retention policy and a dump job cannot break failover |
+| **P6** | the same, and then `make all` once | Its own `test_archive` performs a promotion, so this phase does exercise failover — but through its check rather than as a side effect. The full run at the end is to confirm the finished lab, not to test P6 |
 
 ### P0 — Fork Lab 2 — **done**
 
@@ -250,7 +251,32 @@ Both are defensible. Choosing silently is not.
 **Done when.** A dump completes, is unreadable straight from the bucket, and
 reloads into a scratch database.
 
-### P6 — Verification
+### P6 — Verification — **done**
+
+> The three remaining criteria have checks, and all three pass.
+>
+> **AC-2** (`test_repository`): every node configured for S3 and able to reach
+> it, every backup `info` lists present in the bucket, and nothing written to
+> local disk since the move. **AC-5** (`test_encryption`): both prefixes read
+> straight from the bucket begin `Salted__`; the repository will not open with
+> `--repo1-cipher-type=none`; the dump will not open with the *repository*
+> passphrase, so the two stores genuinely have separate keys. **AC-6**
+> (`test_archive`): a promotion mid-cycle, after which the new primary archives
+> into the same stanza on a new timeline (`0000000D` -> `0000000E`), `check` and
+> `verify` both pass, every backup written by the old leader is still listed,
+> and the next backup is taken by the promoted node.
+>
+> **The window, measured:** a transaction committed after the promotion reached
+> the off-host archive in **1s** with a forced segment switch; unforced,
+> `archive_timeout` bounds it at 60s. That fills the RPO half of
+> [`SLA.md`](../SLA.md)'s corruption row, which read *not established*.
+>
+> One bug of my own, worth keeping: the first AC-2 check listed the whole backup
+> prefix and grepped it. **S3 caps a listing at 1000 keys**, one full backup of
+> this cluster is more than that, and a truncated listing does not error -- it
+> silently omits the newest backups and reports them missing. `lab3-s3 list` now
+> follows continuation tokens, and the check probes per label instead.
+
 
 **What.** The checks that turn all of the above into acceptance criteria.
 **How.** New scripts wired into `run-all.sh` in the existing style — each repairs

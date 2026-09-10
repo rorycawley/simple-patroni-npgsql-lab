@@ -14,7 +14,7 @@ It produces two things, and everything here serves one of them.
 
 | Deliverable | What it is | Where it lives | How far along |
 | --- | --- | --- | --- |
-| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 2 of 8 stages built, 1 in progress |
+| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 3 of 8 stages built |
 | **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 3 drilled, 6 reasoned, 1 stub |
 
 Each stage is a lab: a self-contained cluster that builds from nothing with two
@@ -31,7 +31,7 @@ point of the exercise.
 | --- | --- | --- |
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | **Built and verified** |
 | [2](lab2/README.md) | Every Lab 1 guarantee, now on LUKS2 volumes — PostgreSQL and etcd on separate devices — with TLS on every channel, mutual where the peer is a machine | **Built and verified** |
-| [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **In progress** — AC-1 to AC-5 met; the failover measurement remains |
+| [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **Built and verified** |
 | [4](lab4/README.md) | Recovery from total loss: VMs, volumes and local secrets destroyed, then rebuilt onto fresh machines | Specified |
 | [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | Specified |
 | [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
@@ -159,7 +159,7 @@ needs that they do not have — the list this proof of concept exists to produce
 | --- | --- | --- |
 | **Fault domains** | Three VMs on one machine | Three independent domains. No single domain may hold two of the three nodes — [`SLA.md`](SLA.md#fault-domains-must-the-nodes-be-on-separate-hypervisors) |
 | **Fencing** | `softdog`, a kernel timer | A hardware or hypervisor watchdog. `softdog` cannot fire during a kernel panic, because the timer that would fire it has stopped too |
-| **Backup repository** | Local to each node in Labs 1–2; a single MinIO in Lab 3 | Off-host, and a second repository. One repository is a single point of failure for every recovery you might ever attempt |
+| **Backup repository** | Off-host and encrypted as of Lab 3, but a **single** MinIO | A second repository. One is a single point of failure for every recovery you might ever attempt |
 | **Restore** | Not yet rehearsed — [Lab 4](lab4/README.md) is unbuilt | A restore rehearsed on a schedule, not on the day it is needed |
 | **Secrets** | Generated into an uncommitted `.secrets/`; superuser and replication passwords sit in cleartext in `patroni.yml` | A secrets manager, with each workload fetching at start — [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) |
 | **PKI** | A private CA issuing certificates at build time | Issuance, rotation, revocation, and expiry monitoring. Expiry is the one outage that is entirely preventable by watching a number |

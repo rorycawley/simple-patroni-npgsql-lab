@@ -129,7 +129,31 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
 | Planned switchover | **0** | ~2s to move the leader | n/a — scheduled | measured, n = 1 |
 | Every standby lost at once | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
-| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 8 — not built |
+| Corruption, deletion, bad migration | **≤ 60s**, bounded by `archive_timeout` — not by backup age | hours — restore plus replay | **not established** | RPO measured in [Lab 3](lab3/README.md); RTO awaits Labs 4 and 8 |
+
+### The last row's RPO is now measured; its RTO is not
+
+Half of that row was filled in by [Lab 3](lab3/README.md), and the distinction it
+turns on is the one most often got wrong:
+
+> **Backup frequency does not set this RPO. The WAL archive does.**
+
+Taking a full backup daily does not mean losing up to a day. The base backup is
+the floor recovery replays *from*; the archived WAL carries it forward to the
+last segment that reached the repository. So the window is bounded by
+`archive_timeout`, which is **60s** here — and `make test_archive` measures the
+real figure: a transaction committed immediately after a promotion was archived
+off-host in **1s** when a segment switch was forced. The 60s is the worst case
+for an idle cluster that has not filled a segment, not the expected one.
+
+Two conditions that bound is contingent on, both asserted by that check: the
+archive must be **off the database hosts**, which it now is, and it must survive
+a promotion — `archive_command` runs wherever the primary is, and a regime that
+stops at the first failover would make this number fiction.
+
+**The RTO stays unestablished**, and deliberately so. Knowing what you could lose
+is not knowing how long you would be down, and only a rehearsed restore
+([Lab 4](lab4/README.md)) can supply that.
 
 **The last row is outside what HA can address.** Failover, fencing and quorum
 commit all assume a node stopped working. A bad migration or an erroneous

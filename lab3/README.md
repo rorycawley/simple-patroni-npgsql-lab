@@ -1,11 +1,12 @@
 # Lab 3: durable backups
 
-> **Status: in progress — P0 to P5 of [`PLAN.md`](PLAN.md) complete.**
-> **AC-1 to AC-5 are met**: the repository is off-host and encrypted, only the
-> node holding the leader key writes to it, retention expires dependents
-> correctly, and the logical dumps are separately encrypted and reload.
-> **AC-6 is not built** — archiving across a promotion, and the measurement of
-> the recoverable window — and no result is claimed for it.
+> **Status: built and verified.** All six acceptance criteria are met:
+> `make all` is **23 of 23 in 9m19s**, covering every check this lab adds
+> alongside every check inherited from Labs 1 and 2. That run was against
+> existing VMs; the last from-scratch build was 14m02s, before this lab's own
+> checks existed. What this lab does **not** claim is that any of it can be
+> restored — that is [Lab 4](../lab4/README.md), and keeping them apart is the
+> point.
 
 The shared components, cluster design and prerequisites are in the
 [top-level README](../README.md). This file covers Lab 3 only: what it must
@@ -42,9 +43,11 @@ currently holds the leader key, and carries logical dumps under their own prefix
 with their own passphrase — `pgbackrest info` reports `status: ok` where it
 reported `error (no valid backups)` three phases ago.
 
-**AC-1 to AC-5 are met.** What remains is **AC-6**: that archiving survives a
-promotion without a gap, and the measurement of how far past the last backup
-recovery can reach. That is P6.
+**All six criteria are met.** The last of them, AC-6, also produced the number
+this lab owed [`SLA.md`](../SLA.md): a transaction committed immediately after a
+promotion reached the off-host archive in **1s** with a forced segment switch,
+and `archive_timeout` bounds the same window at **60s** without one. That is the
+RPO for corruption and deletion — bounded by the archive, not by backup age.
 
 ## Why there are two
 

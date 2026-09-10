@@ -123,9 +123,12 @@ main() {
 
   run_phase "Cluster services, quorum, replication, pgBackRest" verify_cluster optional
   run_phase "Object store: reachable from every node over verified TLS" test_minio optional
+  run_phase "Repository: off-host, reachable from every node, complete" test_repository optional
   run_phase "Backups: a history exists, and only the leader creates it" test_backup optional
   run_phase "Backup chain: it verifies, and retention expires dependents" test_chain optional
   run_phase "Logical dumps: encrypted, readable, and they reload" test_dump optional
+  run_phase "Encryption: every object needs its passphrase, both prefixes" test_encryption optional
+  run_phase "Archiving survives a promotion, and the window is measured" test_archive optional
   run_phase "Encryption at rest: LUKS2 volumes, and a missing one stops the service" test_at_rest optional
   run_phase "PKI: certificates assert the right identities" test_pki optional
   run_phase "Encryption in transit: every channel, plaintext refused" test_in_transit optional
