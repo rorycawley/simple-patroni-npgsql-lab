@@ -114,6 +114,89 @@ verification, not recency.
 No. It is a hypothesis. That is why restoring is
 [its own lab](lab4/README.md) rather than a footnote to taking backups.
 
+## Before a manual change, do you need either?
+
+Usually **no** — and reaching for a backup first is often a sign the change is
+about to be made the risky way.
+
+### The cheapest protection is not a backup
+
+It is not committing yet.
+
+```sql
+BEGIN;
+UPDATE accounts SET status = 'closed' WHERE id = 4711;
+-- UPDATE 1        <- expected 1. Good.
+COMMIT;
+```
+
+Had that reported `UPDATE 40000`, a `ROLLBACK` ends it and no backup was ever
+needed. This is the only measure that **prevents** the mistake rather than
+recovering from it, and it costs nothing. For a manual change — unreviewed,
+unversioned, often typed under pressure — that matters more than it does for a
+reviewed migration, not less.
+
+### Schema changes are the same, with named exceptions
+
+PostgreSQL has **transactional DDL**, which surprises people arriving from Oracle
+or MySQL:
+
+```sql
+BEGIN;
+ALTER TABLE orders DROP COLUMN legacy_ref;
+-- inspect
+ROLLBACK;   -- the column is still there
+```
+
+So the same discipline covers most schema work. The exceptions are the statements
+that cannot run inside a transaction, and those are exactly where real protection
+is needed:
+
+- `CREATE INDEX CONCURRENTLY`, `DROP INDEX CONCURRENTLY`, `REINDEX CONCURRENTLY`
+- `VACUUM`, `VACUUM FULL`
+- `CREATE DATABASE`, `DROP DATABASE`
+- `CREATE TABLESPACE`, `DROP TABLESPACE`
+- `ALTER SYSTEM`
+
+### When a transaction is not enough
+
+| Situation | What to take |
+| --- | --- |
+| The statement cannot be wrapped in a transaction | Restore point |
+| Correctness cannot be judged until after the commit | Restore point |
+| The change destroys data — `DROP TABLE`, `DROP COLUMN` | Targeted `pg_dump` of those tables |
+| You will want to know what the schema *was* | `pg_dump --schema-only` |
+
+Note what is absent from that table: **taking a fresh full backup.** The regular
+backup already exists. What is missing is a precise point to return to, and that
+costs milliseconds rather than minutes:
+
+```sql
+SELECT pg_create_restore_point('before_manual_fix_4711');
+SELECT pg_switch_wal();
+```
+
+The `pg_switch_wal()` is not decoration. A restore point is a record inside the
+*current* WAL segment, and it is not in the repository until that segment is
+archived.
+
+Treat the restore point as the emergency brake. Using it rewinds the whole
+cluster and discards everything committed since, so for one mangled table the
+targeted dump is the better instrument — the same escalation
+[Lab 6](lab6/README.md) has to measure.
+
+### Two things specific to this cluster
+
+- **Under `synchronous_mode_strict`, a manual change blocks** if no standby can
+  confirm it. That is the [intended trade](SLA.md#the-exception-being-closed), but
+  at a `psql` prompt it presents as a hang rather than an error. Check the cluster
+  is healthy before starting.
+- **Point-in-time recovery is not fully available yet.** Labs 1 and 2 keep
+  pgBackRest repositories locally on each node, which is explicitly not a durable
+  design. For recovering from a *mistake* that is adequate — the node is still
+  there — but it does not survive losing the node, and an off-host repository
+  does not arrive until [Lab 3](lab3/README.md).
+
 ## What neither protects against
 
 Worth stating, because both are easily assumed to cover it:
