@@ -185,6 +185,8 @@ From an empty machine:
 
 The four encryption checks sit above the Lab 1 ones deliberately: if the cluster
 is not encrypted there is little point asking whether it fails over correctly.
+That run predates the runbook check, which adds a fifteenth phase between the
+quorum-commit and failover checks.
 
 That block is one run. Across the seven consecutive from-scratch builds that
 preceded `synchronous_mode_strict` the aggregate was less uniform, and it is
@@ -219,8 +221,15 @@ make check              # AC-4: everything above plus every Lab 1 check
 ```
 
 The Lab 1 checks — `test_connection`, `test_client`, `test_sync`,
-`test_failover`, `test_fencing` — exist here under the same names and assert the
-same things; see the [Lab 1 guide](../lab1/README.md#acceptance-criteria).
+`test_runbook`, `test_failover`, `test_fencing` — exist here under the same names
+and assert the same things; see the
+[Lab 1 guide](../lab1/README.md#acceptance-criteria).
+
+`test_runbook` is worth calling out, because it asserts something about this lab
+specifically. It lints [`RUNBOOKS.md`](../RUNBOOKS.md) against *this* cluster, so
+a procedure that is silently Lab 1-shaped — a path that only exists without
+encrypted volumes, a service reachable only without TLS — fails here rather than
+being discovered by whoever is handed the runbook.
 
 The [Ansible guide](ansible/README.md) covers what the configuration applies and
 the network policy it installs. [`PLAN.md`](PLAN.md) records how this lab was

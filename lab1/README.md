@@ -179,6 +179,33 @@ The `blocking` tier is the decisive one for quorum commit itself. `SyncRep` is P
 backend waiting on a synchronous standby, so that wait state cannot occur on an
 asynchronous cluster at all — no timing heuristic is involved.
 
+### The runbook is drilled, not reviewed
+
+```sh
+make test_runbook               # lint and all three drills
+make test_runbook lint          # only that the runbook matches this system
+```
+
+[`RUNBOOKS.md`](../RUNBOOKS.md) is a deliverable, so it is tested like one. A
+runbook is an assertion until something runs it, and reviewing one by eye is how
+four wrong commands survived into its first version.
+
+| Part | Asserts |
+| --- | --- |
+| `lint` | Every absolute path, systemd unit and `sudo -u` account the runbook names exists **on this cluster** — so a renamed service or a moved config path fails here rather than at 03:00. A bare `psql` fails too: it is not on `PATH` on these nodes. Content marked for the other lab is skipped, which forces a lab-specific instruction to say so rather than read as general |
+| `sync` | Runbook 1 end to end: stop both standbys, run the documented diagnosis, assert it reports `ANY 1 (*)`, assert a commit really blocks, apply the documented fix, and assert one standby is enough — as the page claims |
+| `pause` | Runbook 3: pause the cluster, assert the documented signal appears **and** that the member table still reads healthy, which is the danger the procedure exists to describe |
+| `switchover` | Runbook 8: perform a planned switchover, assert the leader moved to the intended candidate, and assert the cluster returns to full redundancy |
+
+Each drill runs its diagnosis against a **healthy** cluster first and requires it
+not to match. Without that negative control a procedure could be telling you to
+look for something that is always there.
+
+The three drilled procedures are deliberately different in kind: one incident you
+must recognise, one silent degradation that looks exactly like health, and one
+planned operation performed on purpose. Everything else in the runbook is marked
+`REASONED` or `STUB` rather than claimed.
+
 ### Split-brain prevention, and where softdog fits
 
 ```sh
@@ -302,7 +329,10 @@ From an empty machine:
 ==============================================================================
 ```
 
-That is a first run with nothing cached: it downloads the Rocky image and
+That run predates the runbook check, which adds an eleventh phase between the
+quorum-commit and failover checks.
+
+It is otherwise a first run with nothing cached: it downloads the Rocky image and
 installs PostgreSQL, Patroni, etcd and pgBackRest on all three nodes. Rerunning
 `make all` against existing VMs takes about five minutes, because VM creation and
 package installation both become no-ops — the two setup phases drop to seconds,
@@ -322,6 +352,7 @@ make test_connection    # AC-1
 make test_failover      # AC-2
 make test_client        # the client's configured guarantees
 make test_sync          # quorum commit really is synchronous
+make test_runbook       # RUNBOOKS.md matches this lab, and its procedures work
 make test_fencing       # split-brain prevention
 ```
 

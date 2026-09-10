@@ -127,15 +127,16 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | PostgreSQL killed, Patroni alive | **0** | ~10–25s | ≤ 120 events/yr | measured |
 | Patroni frozen, PostgreSQL serving | **0** | ~25–60s | ≤ 50 events/yr | measured |
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
+| Planned switchover | **0** | ~2s to move the leader | n/a — scheduled | measured, n = 1 |
 | Every standby lost at once | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
-| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 6 — not built |
+| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 8 — not built |
 
 **The last row is outside what HA can address.** Failover, fencing and quorum
 commit all assume a node stopped working. A bad migration or an erroneous
 `DELETE` is the cluster working correctly on a wrong instruction: replication
 carries it to every standby in milliseconds, and quorum commit makes it durable
 before it is acknowledged. No healthy node retains the old state. Only a backup
-answers it, which is why Labs 3, 4 and 6 exist and why that RTO is blank rather
+answers it, which is why Labs 3, 4 and 8 exist and why that RTO is blank rather
 than guessed.
 
 ## Where the numbers come from
@@ -264,8 +265,13 @@ a database.
 - **Correlated failure.** Every lab VM runs on one laptop — the least valid row
   in the placement table above, and the largest gap between what these labs prove
   (mechanisms) and what a deployment needs (availability).
-- **Planned maintenance.** `patronictl switchover` is a controlled promotion and
-  should beat an election, but the labs do not measure it.
+- **Repeated planned maintenance.** `make test_runbook` now measures a single
+  switchover — 2s to move the leader, an order of magnitude faster than an
+  election, as expected from a controlled handover with no `ttl` to wait out. One
+  observation is not a distribution, and a switchover under write load will be
+  slower. The cost of a *complete* patch cycle across three nodes, which is the
+  figure a change-advisory board asks for, is what
+  [Lab 6](lab6/README.md) is designed to supply.
 - **The application tier.** Everything here stops at the database.
 - **Sustained load.** RTO is measured idle; promotion under heavy write load has
   more WAL to replay and will be slower.

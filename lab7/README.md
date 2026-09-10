@@ -1,147 +1,182 @@
-# Lab 7: monitoring with Grafana LGTM
+# Lab 5: schema migration
 
 > **Status: specified, not built.** Everything below is the design and its
 > acceptance criteria. No results are claimed.
 
 The shared components, cluster design and prerequisites are in the
-[top-level README](../README.md). This file covers Lab 7 only.
+[top-level README](../README.md). This file covers Lab 5 only.
 
 ## Goal
 
-Know that something has gone wrong before someone tells you, and prove that
-claim the same way every other lab proves its own: by breaking things on purpose
-and requiring the monitoring to notice.
+Ship a schema change to a live Patroni cluster without taking it down, and know
+what is left behind if the infrastructure interrupts it — both halves proven,
+not asserted.
 
-## Monitoring is the easiest thing in this series to fake
+## Two ways a migration goes wrong
 
-A lab that stands up Grafana, renders dashboards and declares success has proven
-that Grafana renders. Observability failures are silent by construction — a
-broken alerting pipeline looks exactly like a quiet night, and the absence of
-alerts is indistinguishable from the absence of problems.
-
-What makes this testable is something the series already has: **a fault
-injection suite**. Labs 1 and 2 can kill a VM, kill PostgreSQL, freeze Patroni
-until the watchdog resets the node, cut a node off from etcd, and stop both
-standbys. So the criterion is not "are there dashboards" but:
-
-> For every fault the labs can inject, monitoring must raise a specific alert
-> within a measured time — and must raise none of them on a healthy cluster.
-
-## The failures that actually need this
-
-Most faults in Labs 1 and 2 are self-healing. Kill a node, Patroni promotes,
-service returns in about a minute. Detection latency barely matters when recovery
-is automatic and already measured.
-
-Two failures are different, and they are the point of this lab:
-
-| Failure | Why monitoring is the only defence |
-| --- | --- |
-| **Writes blocked on synchronous replication** | With [`synchronous_mode_strict`](../SLA.md#the-exception-being-closed), losing both standbys stops writes until someone intervenes. Nothing recovers on its own |
-| **Backups silently stopped** | Nothing throws. The repository simply stops filling, and it is discovered when a restore is needed |
-
-Both share the property that makes them dangerous: **no error is raised**. The
-system quietly stops doing something it was supposed to keep doing.
-
-The first has an exact signal, observed while building Lab 1 rather than guessed:
-
-```text
-synchronous_standby_names = 'ANY 1 (*)'   and   backends in wait_event = SyncRep
-```
-
-`ANY 1 (*)` is Patroni's unsatisfiable placeholder. It cannot occur on a healthy
-cluster, so an alert on it has no false-positive mode.
-
-## What is monitored
-
-| Component | Source | Notes |
+| | Failure | Covered by |
 | --- | --- | --- |
-| Patroni | **native `/metrics` on 8008** | No exporter. `patroni_primary`, `patroni_cluster_unlocked`, `patroni_pending_restart`, xlog location |
-| etcd | **native `/metrics` on 2379** | `etcd_server_has_leader`, `leader_changes_seen_total`, and backend fsync duration — which is the number Lab 2's separate-volume decision was made to protect |
-| PostgreSQL | `postgres_exporter` | Replication lag, `sync_state`, backends in `SyncRep`, connections against `max_connections` |
-| Node | `node_exporter` | Disk free on the LUKS volumes, CPU, memory |
-| pgBackRest | no native exporter — see below | |
+| Your migration interrupts your **users** | It takes a lock, queues every query behind it, and the site stops | AC-1 to AC-4 |
+| The infrastructure interrupts your **migration** | The primary fails over mid-flight | AC-5, AC-6 |
 
-Two integration points fall out of Lab 2 rather than being invented here. Its
-Patroni REST API and etcd both require **client certificates**, so the collector
-needs its own identity issued from the existing CA — the second use of the "one
-CA, extended" decision recorded in [`lab2/PLAN.md`](../lab2/PLAN.md). And
-`postgres_exporter` needs a least-privilege monitoring login, on the same
-reasoning that gave the application `app_runtime` rather than a superuser — the
-`monitoring` role in [`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md).
+They were briefly two labs. Merging them was the right call, because the two
+halves disagree about exactly one statement and a reader should not have to
+reconcile two documents to find that out.
 
-## pgBackRest
+## The decision under test
 
-Called out separately because its failure mode is unlike everything else here:
-the failure is an **absence of activity**, not the presence of an error. Two
-complementary sources, because neither alone is sufficient:
+Downtime for migrations is the intuitive answer and generally the wrong one. It
+does not make a bad migration safe — a wrong `DROP COLUMN` means restoring from
+backup either way — and it has costs of its own: migrations get batched into
+large risky windows, and on this cluster "bring it down" means stopping the
+application and then suppressing the failover machinery with `patronictl pause`,
+adding operational steps to a system designed never to stop.
 
-| Source | Answers |
+> No downtime, provided the schema is compatible with both the current and the
+> previous application version, and every migration bounds its own lock wait.
+
+Compatibility is what makes an application rollback possible at all; a downtime
+window narrows the broken period but *forbids* rollback, because the old version
+can no longer run. Bounding the lock wait is what stops a 10ms migration becoming
+a five-minute outage.
+
+## What PostgreSQL already guarantees
+
+Two widely-feared failures largely cannot happen here, and this lab's job is to
+demonstrate that rather than repeat the folklore.
+
+**Transactional DDL** means Flyway writes the migration *and* its
+`flyway_schema_history` row in the same transaction. They cannot disagree. Kill
+the primary mid-migration and the result is a clean rollback, not a half-applied
+schema with a history table that lies about it.
+
+**The lock is session-scoped.** Flyway serialises runs with a session-level
+advisory lock on PostgreSQL, and session-level locks die with the session. A
+killed primary releases it; there is no lock left behind to block every later
+deployment. That scenario is inherited from databases without these properties.
+
+Both are still tested. An expected result is not a demonstrated one.
+
+## The one construct where the two halves disagree
+
+`CREATE INDEX CONCURRENTLY` cannot run inside a transaction, so it forfeits every
+guarantee above. Interrupt it and PostgreSQL leaves an **`INVALID` index** in the
+catalogue: the migration is recorded as failed, the database holds a partial
+artefact, and a naive re-run does not clean it up — the invalid index must be
+dropped explicitly first.
+
+It is also exactly what the zero-downtime half recommends, because it is the only
+way to add an index without locking writers out.
+
+> Use `CONCURRENTLY` to avoid locking your users out, and know it is the one
+> migration that leaves debris if the primary dies mid-flight.
+
+That is one instruction with a caveat, which is why these belong in one lab. Two
+labs would have made it look like a contradiction.
+
+## What "simulated" means
+
+There is no CI/CD server. A script plays the pipeline, invoked through `make`
+like every other check:
+
+| Real pipeline | Here |
 | --- | --- |
-| `pg_stat_archiver` (native PostgreSQL) | Is WAL archiving working *right now*? `archived_count`, `failed_count`, `last_failed_time` |
-| `pgbackrest info --output=json`, parsed to a textfile collector | When did a backup last *succeed*? Age, type, repository size |
+| Jenkins/Actions job | `scripts/deploy.sh` — gate, migrate, verify |
+| Application release | Two builds of the lab client, `v1` and `v2` |
+| Deployment gate | A precondition check against Patroni before migrating |
+| Rollback | Re-running the previous client build |
 
-The headline metric is the **age of the last successful backup**, and the alert
-is on staleness rather than on any error. `pg_stat_archiver` gives the earliest
-warning that `archive_command` has broken; the backup age is what catches a
-repository that quietly stopped filling.
+What is worth testing is the *database* behaviour under migration, and none of it
+depends on which tool triggers the run.
 
-## Logs, and Alloy
+## Scope
 
-Alloy runs on each node doing both jobs — scraping metrics and shipping logs —
-so there is one collector to configure, certificate, and monitor.
-
-Worth collecting: PostgreSQL (`csvlog`), the `percona-patroni` journal where
-elections, promotions and self-demotions are recorded, etcd, pgBackRest, and the
-kernel journal.
-
-One limitation is worth testing rather than assuming. A softdog reset kills the
-node abruptly, so the last seconds of log may never be shipped. Whether a
-watchdog reset can be explained *after the fact* is a real question about this
-design, and Lab 7 should answer it honestly rather than assume the logs are there.
+| In scope | Out of scope |
+| --- | --- |
+| Flyway applying versioned migrations against the current primary | A real CI/CD server, artefacts, or environments |
+| Additive migrations with the client committing throughout | Blue/green or canary deployment of the application |
+| Expand-contract for a destructive change, across simulated releases | Online schema-change tooling (`pg_repack`, `pgroll`) |
+| `lock_timeout` as the bound on blast radius | Logical-replication-based migration |
+| Failover injected *during* a migration, transactional and not | Recovering from a migration that was *wrong* — [Lab 6](../lab6/README.md) |
+| A deploy gate that refuses a degraded cluster | Multi-tenant or sharded schemas |
 
 ## Topology
 
-The LGTM stack runs on the control machine, not in more VMs — the same reasoning
-that puts MinIO there for Lab 3, and that ruled out a Tang server in Lab 2.
-Grafana's `otel-lgtm` image bundles Grafana, Mimir, Loki and Tempo in one
-container, reachable from the guests at the Lima shared-network gateway.
+Five VMs. Flyway gets its own, separate from both the cluster and the
+application.
+
+| VM | Role |
+| --- | --- |
+| `lab5-pg1/2/3` | PostgreSQL, Patroni, etcd |
+| `lab5-app1` | The .NET client, `v1` and `v2` |
+| `lab5-flyway1` | Flyway |
+
+Flyway is deliberately not on the application host. They are different actors
+with different credentials — `migrator` versus `app_runtime`, per
+[`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md) — and in production the thing
+that migrates the schema is not the thing that serves traffic. Co-locating them
+would quietly re-merge a separation the design depends on.
+
+The application and Flyway hosts need far less than the database nodes; sizing
+them down keeps five VMs viable on one laptop.
 
 ## Acceptance criteria
 
 | ID | Property | Pass condition |
 | --- | --- | --- |
-| AC-1 | Every component is observable | Metrics present from Patroni, etcd, PostgreSQL, the node and pgBackRest; stopping one exporter is itself detected |
-| AC-2 | Every injectable fault is detected, and none are invented | Each fault from Labs 1 and 2 raises its specific alert, with the detection latency recorded; a healthy cluster raises none of them |
-| AC-3 | Backup failure is detected by absence | Breaking `archive_command` raises an alert; letting backup age exceed its threshold raises another |
-| AC-4 | A failover can be reconstructed from logs alone | Given only Loki, identify which node was primary, when it was lost, and which was promoted |
-| AC-5 | The monitoring pipeline is itself monitored | A stopped Alloy is detected rather than read as silence, and a deliberately fired alert is observed arriving |
+| AC-1 | An additive migration is invisible to the client | A client committing continuously through the migration records zero failed transactions and no commit gap beyond its normal latency |
+| AC-2 | Lock contention is **bounded**, not merely absent | With a conflicting long transaction held: without `lock_timeout` the client's commits stall behind the queued DDL; with it, the migration aborts quickly and the client is unaffected |
+| AC-3 | Both application versions work against both schemas | `v1` and `v2` each succeed against the pre- and post-migration schema — rollout *and* rollback are safe |
+| AC-4 | A destructive change ships without downtime | A column rename completes via expand → backfill → switch → contract, with AC-1 and AC-3 holding at every step |
+| AC-5 | An interrupted migration leaves no partial state | Killed mid-flight — by an aborted pipeline **or** by a failover — the schema and `flyway_schema_history` agree, no lock is held, and a re-run converges |
+| AC-6 | The non-transactional case is exactly bounded | `CREATE INDEX CONCURRENTLY` interrupted leaves an `INVALID` index; a re-run does **not** silently repair it; the documented repair does |
 
 ### AC-2 is the one that matters
 
-Its second half is what makes it more than a checklist. A rule that fires on
-everything detects every fault and is worthless; requiring silence on a healthy
-cluster is what separates detection from noise.
+The others can pass on a quiet cluster and prove little. AC-2 asserts a
+mechanism, and needs its negative control to mean anything: the *same* migration,
+behind the *same* long-running transaction, must be shown to stall the client
+when `lock_timeout` is absent. A test that only demonstrates the safe
+configuration has not shown the danger it claims to prevent.
 
-### AC-5 is the one usually skipped
+`ALTER TABLE` takes `ACCESS EXCLUSIVE`. When it waits on a conflicting lock,
+every subsequent query queues behind it — the outage comes from the queue, not
+from the DDL, and it happens whether or not a maintenance window was declared.
 
-Every other criterion assumes the pipeline works. If Alloy dies, or an alert
-fires into a void, the dashboards stay green and the cluster looks healthy —
-which is the specific failure this lab exists to rule out.
+### AC-6 is AC-5's negative control
 
-## What this contributes back
+AC-5 claims an interrupted migration leaves nothing behind. AC-6 shows the
+guarantee has a boundary and precisely where it lies. Proving the safe case alone
+would imply a guarantee broader than the one that exists.
 
-[`SLA.md`](../SLA.md) measures recovery time and says nothing about detection
-time. For self-healing faults that is fine. For the two failures above it is
-half the answer: their real RTO is *detect + decide + act*, and only the last
-part is currently measured.
+AC-5 must also demonstrate that it *could* detect a held lock — a deliberately
+held advisory lock blocking a second run — or its "no lock is held" clause is
+vacuous, passing because the condition never occurs rather than because the check
+works.
 
-Lab 7's output is therefore a detection-latency column in `SLA.md`, which is what
-makes it a measurement rather than a dashboard exercise.
+## Notes specific to this cluster
 
-## Open decisions
-
-| Question | Consideration |
-| --- | --- |
-| **Tempo and traces** | Only earn their place if the .NET client is instrumented. Then a failover is visible from the client's side — "retried 16 times" correlated with "Patroni promoted pg3" on one timeline, which metrics cannot show. The cost is real .NET work |
-| **Alert delivery** | Proving an alert *fires* is easy; proving it *arrives* needs a destination. A local webhook receiver keeps AC-5 self-contained and assertable |
+- **Flyway runs as `migrator`, not as the application.** `migrator` owns the
+  tables it creates, so the application sees nothing Flyway adds unless default
+  privileges were set against `migrator`. See
+  [`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md).
+- **Flyway needs the same primary-seeking configuration the client has.** The
+  JDBC equivalent of `Target Session Attributes=primary` is a multi-host URL with
+  `targetServerType=primary`. Without it, a re-run after failover reaches a stale
+  host or a replica and fails read-only.
+- **Verify the JVM's TLS behaviour early.** pgJDBC accepts a PEM file for
+  `sslrootcert`, unlike much of the Java ecosystem, which expects a keystore.
+  Confirm it against a live cluster rather than building around it: an unverified
+  assumption about a TLS stack has already cost this series once, when .NET on
+  macOS turned out not to implement TLS 1.3.
+- **A blocked migration must be bounded.** Under
+  [`synchronous_mode_strict`](../SLA.md#the-exception-being-closed), a migration
+  with no standby available **blocks** rather than failing. That is the intended
+  trade, but a hang reports nothing, holds its lock, and stalls the pipeline
+  behind it. A statement timeout converts it into a failure someone can see.
+- **A long migration loses everything on failover.** A backfill running for
+  minutes is one transaction, and the primary dying rolls all of it back —
+  correct, and an argument for batching that the zero-downtime half makes on
+  entirely different grounds.
+- **Quorum commit taxes every batch.** Each commit waits for a standby fsync, so
+  batch sizing matters more here than on an asynchronous cluster.
