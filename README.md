@@ -18,7 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| [`lab3/README.md`](lab3/README.md), [`lab6/README.md`](lab6/README.md), [`lab7/README.md`](lab7/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
+| [`lab3/README.md`](lab3/README.md), [`lab4/README.md`](lab4/README.md), [`lab6/README.md`](lab6/README.md), [`lab7/README.md`](lab7/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 
@@ -29,7 +29,7 @@ Each file below owns one subject and does not repeat another's.
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | plaintext | plaintext | 3 |
 | [2](lab2/README.md) | Everything Lab 1 proves, on encrypted disks and an encrypted network | LUKS2, separate volumes for PostgreSQL and etcd | TLS on every channel, mutual where the peer is a machine | 4 |
 | [3](lab3/README.md) — specified, not built | Durable backups: pgBackRest **and** `pg_dump` to a MinIO repository, off the database hosts, encrypted and reached over TLS | — | — | — |
-| 4 — not started | Recovery: restoring from a Lab 3 backup, including to a point in time, and proving the restored cluster holds the right data | — | — | — |
+| [4](lab4/README.md) — specified, not built | Recovery: total loss — VMs, volumes and local secrets destroyed — rebuilt onto fresh VMs from the repository alone | — | — | — |
 | 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
 | [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
 | [7](lab7/README.md) — specified, not built | Recovering from a bad migration: mark before migrating, then recover by table or rewind the cluster | — | — | — |
@@ -48,10 +48,16 @@ completes is evidence the data is readable, not merely that bytes were copied.
 Backup and recovery are then deliberately two labs rather than one. Lab 3 can
 finish green while proving nothing about recovery: a repository that accepts writes,
 passes `pgbackrest check` and reports a valid backup set is still only evidence
-that *taking* a backup works. Lab 4 is where that evidence is tested — restore a
-cluster from the repository, bring it back to a chosen point in time, and assert
-the data is the data that was committed. A backup nobody has restored is an
-assumption, and separating the labs keeps it from being mistaken for a result.
+that *taking* a backup works. A backup nobody has restored is an assumption, and
+separating the labs keeps it from being mistaken for a result.
+
+[Lab 4](lab4/README.md) is where that assumption is tested, and it is a test of
+the dependency graph rather than of pgBackRest — which restores perfectly well
+and was never in doubt. It destroys the VMs, their volumes **and** the local
+secrets, then rebuilds onto fresh VMs, which asks the only interesting question:
+is anything required for recovery stored solely inside the thing that was lost?
+The cipher passphrase, the CA, the passwords and the procedure itself all have to
+survive somewhere the disaster did not reach.
 
 Lab 5 asks what a schema migration does when the primary moves underneath it. A
 migration is a write, so Flyway has to find the primary exactly as the
