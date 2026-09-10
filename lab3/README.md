@@ -38,7 +38,7 @@ were copied. One is a backup; the other doubles as a verification pass.
 
 The second argument is blast radius. Recovering a dropped table from a physical
 backup means restoring the whole cluster to a point in time and discarding
-everything committed since — the cost [Lab 7](../README.md) has to measure. A
+everything committed since — the cost [Lab 6](../lab6/README.md) has to measure. A
 logical dump restores that one table and touches nothing else.
 
 The third is escape. A physical backup is useless for moving to a new major
@@ -49,7 +49,7 @@ is "get the data out of here".
 
 | In scope | Out of scope |
 | --- | --- |
-| A pgBackRest repository on MinIO, off the database hosts | Restoring from it — that is [Lab 4](../README.md) |
+| A pgBackRest repository on MinIO, off the database hosts | Restoring from it — that is [Lab 4](../lab4/README.md) |
 | `pg_dump` of `appdb`, scheduled and stored in the same repository | Cross-region or offsite replication of the repository |
 | Repository encryption (`repo1-cipher-type=aes-256-cbc`) and TLS to MinIO | A second, independent repository |
 | Backups and WAL archiving that survive a failover | Backup of etcd — see below |
@@ -117,7 +117,7 @@ what they contain.
 
 Archiving is a property of the primary, and the primary moves. A backup regime
 that works until the first failover and then silently stops is the exact shape of
-failure [Lab 8](../lab8/README.md) exists to detect — and the reason its headline
+failure [Lab 7](../lab7/README.md) exists to detect — and the reason its headline
 metric is the age of the last successful backup rather than any error count.
 
 ## What this lab does not claim
@@ -125,5 +125,5 @@ metric is the age of the last successful backup rather than any error count.
 That any of it can be restored. A repository that accepts writes, passes
 `pgbackrest check` and reports a valid backup set is evidence that *taking* a
 backup works. Whether the result can rebuild a working cluster is
-[Lab 4](../README.md), and keeping them apart is what stops the first result
+[Lab 4](../lab4/README.md), and keeping them apart is what stops the first result
 being read as the second.

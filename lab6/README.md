@@ -1,4 +1,4 @@
-# Lab 6: schema migration without downtime
+# Lab 6: recovering from a bad migration
 
 > **Status: specified, not built.** Everything below is the design and its
 > acceptance criteria. No results are claimed.
@@ -8,103 +8,122 @@ The shared components, cluster design and prerequisites are in the
 
 ## Goal
 
-Ship a schema change to a live Patroni cluster without taking it down, and prove
-that claim rather than assert it — including for a destructive change, which is
-where "zero downtime" usually quietly stops being true.
+Undo a schema migration that succeeded and should not have, and measure what
+undoing it costs.
 
-## The decision this lab tests
+## The case every earlier lab is blind to
 
-Downtime for migrations is the intuitive answer and generally the wrong one. It
-does not make a bad migration safe — a wrong `DROP COLUMN` means restoring from
-backup either way — and it has costs of its own: migrations get batched into
-large risky windows, and on this cluster "bring it down" means stopping the app
-and then suppressing the failover machinery with `patronictl pause`, adding
-operational steps to a system designed never to stop. PostgreSQL's transactional
-DDL removes most of the historical reason for the practice.
+A bad migration is not a fault. Nothing crashes, no node is lost, and the cluster
+stays perfectly healthy while doing the wrong thing.
 
-The position under test:
+Worse, the machinery from Labs 1 and 2 works *against* recovery. Quorum commit
+makes the bad migration durable before it is acknowledged, replication carries it
+to both standbys in milliseconds, and a failover hands over a healthy node
+carrying the same broken schema. **No node is left holding the old state.** Every
+guarantee the earlier labs worked to establish is what removes the escape route.
 
-> No downtime, provided the schema is compatible with both the current and the
-> previous application version, and every migration bounds its own lock wait.
+Only a backup answers it, which is why it composes Labs 3 to 5 rather than
+repeating them.
 
-Both halves matter. Compatibility is what makes an application rollback possible
-at all; a downtime window narrows the broken period but *forbids* rollback,
-because the old version can no longer run. Bounding the lock wait is what stops a
-10ms migration from becoming a five-minute outage.
+## What is actually being protected against
 
-## What "simulated" means
+PostgreSQL has transactional DDL, and Flyway wraps each migration in a
+transaction. **A migration that crashes rolls back on its own.**
 
-There is no CI/CD server. A script plays the pipeline, invoked through `make`
-like every other check:
+So nothing here protects against a migration *failing*. It protects against one
+that **succeeded and was wrong** — which is a narrower and more specific risk
+than "we need backups for migrations", and worth stating plainly because it
+determines how much of the machinery below is needed.
 
-| Real pipeline | Here |
-| --- | --- |
-| Jenkins/Actions job | `scripts/deploy.sh` — gate, migrate, verify |
-| Application release | Two builds of the lab client, `v1` and `v2` |
-| Deployment gate | A precondition check against Patroni before migrating |
-| Rollback | Re-running the previous client build |
+## You take a marker, not a backup
 
-The substitution is deliberate. What is worth testing is the *database* behaviour
-under migration, and none of it depends on which tool triggers the run.
+With Lab 3's WAL archiving already running, a full backup before every migration
+is slow and mostly pointless: the base backup exists. What is missing is a
+precise, named point to replay to.
+
+```sql
+SELECT pg_create_restore_point('before_v42_add_orders_index');
+SELECT pg_switch_wal();
+```
+
+The `pg_switch_wal()` is not decoration. A restore point is a record inside the
+*current* WAL segment; if that segment is never archived, the marker is not in
+the repository when it is needed. `archive_timeout = 60s` gets there eventually,
+and forcing the switch means not having to hope.
+
+An LSN captured with `pg_current_wal_lsn()` is equally precise and read-only, if
+writing to the primary before a migration is unwelcome. Timestamps are the weak
+option: clock skew, and no way to separate two events in the same second.
+
+## Three instruments, escalating
+
+The mistake is reaching for the last one first. Rewinding the cluster to the
+marker discards **every transaction committed since** — including all the
+unrelated business that happened while the problem was being diagnosed.
+
+| Instrument | Cost to take | Recovers | Loses |
+| --- | --- | --- | --- |
+| `pg_dump --schema-only` | seconds | nothing | — it tells you *what changed* |
+| Targeted `pg_dump` of affected tables | seconds to minutes | those tables | nothing else |
+| Named restore point + PITR | milliseconds | the whole cluster | every commit since the marker |
+
+```sh
+# The scalpel: only the tables the migration touched.
+pg_dump --format=custom --table=orders --table=order_lines appdb > pre_v42.dump
+
+# The emergency brake: everything, back to the marker.
+pgbackrest restore --type=name --target=before_v42_add_orders_index
+```
+
+This is the concrete reason [Lab 3](../lab3/README.md) carries both pgBackRest
+and `pg_dump`. One is a time machine; the other is a scalpel. A lab holding only
+the physical backup would be forced to discard a day of unrelated work to undo
+two mangled tables.
 
 ## Scope
 
 | In scope | Out of scope |
 | --- | --- |
-| Flyway applying versioned migrations against the current primary | A real CI/CD server, artefacts, or environments |
-| Additive migrations with the client committing throughout | Blue/green or canary deployment of the application |
-| Expand-contract for a destructive change, across simulated releases | Online schema-change tooling (`pg_repack`, `pgroll`) |
-| `lock_timeout` as the bound on blast radius | Logical-replication-based migration |
-| A deploy gate that refuses a degraded cluster | Multi-tenant or sharded schemas |
-| Re-running an interrupted pipeline | Data migration at a scale needing hours of backfill |
-
-Recovering from a migration that was *wrong* is [Lab 7](../README.md). This lab
-is about applying a correct migration safely; Lab 7 is the backstop when the
-migration should never have shipped.
+| A migration that applies cleanly and is semantically wrong | A migration that fails or crashes — transactional DDL already handles it |
+| Restore point and LSN markers, and getting them into the repository | Logical decoding or trigger-based undo |
+| Targeted table-level recovery from a logical dump | Restoring into a different major version |
+| Full-cluster PITR to the marker, and **measuring what it discards** | Automating the choice between the two paths |
+| Rejoining the cluster afterwards | Blue/green database cutover |
 
 ## Acceptance criteria
 
 | ID | Property | Pass condition |
 | --- | --- | --- |
-| AC-1 | An additive migration is invisible to the client | A client committing continuously through the migration records zero failed transactions and no commit gap beyond its normal latency |
-| AC-2 | Lock contention is **bounded**, not merely absent | With a conflicting long transaction held open: without `lock_timeout` the client's commits stall behind the queued DDL; with `lock_timeout` the migration aborts quickly and the client is unaffected |
-| AC-3 | Both application versions work against both schemas | `v1` and `v2` clients each succeed against the pre- and post-migration schema — rollout *and* rollback are safe |
-| AC-4 | A destructive change ships without downtime | A column rename completes via expand → backfill → switch → contract, with AC-1 and AC-3 holding at every step |
-| AC-5 | An interrupted pipeline is re-runnable | After the migration is killed mid-flight, re-running it converges: no held Flyway lock, and `flyway_schema_history` agrees with the actual schema |
+| AC-1 | The marker survives to the repository | After `pg_create_restore_point` and `pg_switch_wal`, the marker is present in archived WAL — verified from the repository, not from the primary's memory |
+| AC-2 | A bad migration is invisible to every HA mechanism | After it applies: one leader, two streaming standbys, no alert, no failover — and **both standbys carry the same broken schema** |
+| AC-3 | Table-level recovery loses nothing else | Restore the affected tables from the targeted dump; rows written to *other* tables after the migration are still present |
+| AC-4 | Full PITR reaches the marker exactly | The restored cluster has the pre-migration schema, contains every transaction committed before the marker, and none committed after |
+| AC-5 | The cost is measured, not described | Report how many committed transactions AC-4 discarded, and how long the cluster was unavailable |
 
-### AC-2 is the one that matters
+### AC-2 is the point of the lab
 
-The others can pass on a quiet cluster and prove little. AC-2 asserts the
-mechanism, and it needs its negative control to mean anything: the *same*
-migration, behind the *same* long-running transaction, must be shown to stall the
-client when `lock_timeout` is absent. A test that only demonstrates the safe
-configuration has not shown the danger it claims to prevent.
+It asserts a *negative*: that everything built in Labs 1, 2 and 8 stays quiet.
+Green health checks, no promotion, no alert — and the corruption faithfully
+replicated to both standbys. Until that is demonstrated, the case for this lab is
+theoretical.
 
-`ALTER TABLE` takes `ACCESS EXCLUSIVE`. When it waits on a conflicting lock,
-every subsequent query queues behind it — the outage comes from the queue, not
-from the DDL, and it happens whether or not a maintenance window was declared.
+### AC-5 is what stops it being a demo
 
-### AC-5 and this cluster
-
-PostgreSQL's transactional DDL means an interrupted migration rolls back
-cleanly, so the schema is not the risk. Flyway's own bookkeeping is: its history
-row and its lock can disagree with reality, and a lock left held blocks every
-later deployment. That is [Lab 5](../README.md)'s failure mode reached by a
-different route — there by failover, here by an aborted pipeline.
+Any restore can be made to look successful. The number that matters is what it
+threw away. Without it, "we restored to before the migration" sounds like a clean
+recovery instead of the trade it is.
 
 ## Notes specific to this cluster
 
-- **Flyway runs as `migrator`, not as the application.** The application must not
-  be able to alter schema, and the migration tool must not be the application.
-  That separation has a consequence worth knowing before it bites: `migrator`
-  owns the tables it creates, so the application sees nothing Flyway adds unless
-  default privileges were set against `migrator`. See
-  [`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md).
-- **Flyway must reach the primary**, exactly as the application does. Against a
-  replica it fails read-only — noisy but safe.
-- **Quorum commit taxes backfills.** Every batch commit waits for a standby
-  fsync, so batch size matters more here than on an asynchronous cluster.
-- **If [`synchronous_mode_strict`](../SLA.md#the-exception-being-closed) is enabled**, a
-  migration running while both standbys are unavailable will block rather than
-  proceed. Correct behaviour, and the reason AC-5's gate checks cluster health
-  before migrating rather than after failing.
+- **Patroni must be paused before a PITR restore.** Restoring under a running
+  Patroni means it sees a node diverging from the DCS and tries to repair what
+  is deliberately being rewound. `patronictl pause` first, resume after.
+- **The standbys are not a recovery source.** They hold the same broken schema
+  within milliseconds. Rebuilding them from the restored primary is part of the
+  recovery, not an alternative to it.
+- **A restore rewinds the whole cluster, including other databases.** If `appdb`
+  shares the cluster with anything else, PITR takes that back too — which is an
+  argument for the scalpel wherever it suffices.
+- **`synchronous_mode_strict` affects the rebuild.** A freshly restored primary
+  with no standby attached cannot accept writes until one rejoins. Expected
+  behaviour, and worth knowing before it looks like a failed restore.

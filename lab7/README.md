@@ -1,4 +1,4 @@
-# Lab 7: recovering from a bad migration
+# Lab 7: monitoring with Grafana LGTM
 
 > **Status: specified, not built.** Everything below is the design and its
 > acceptance criteria. No results are claimed.
@@ -8,122 +8,140 @@ The shared components, cluster design and prerequisites are in the
 
 ## Goal
 
-Undo a schema migration that succeeded and should not have, and measure what
-undoing it costs.
+Know that something has gone wrong before someone tells you, and prove that
+claim the same way every other lab proves its own: by breaking things on purpose
+and requiring the monitoring to notice.
 
-## The case every earlier lab is blind to
+## Monitoring is the easiest thing in this series to fake
 
-A bad migration is not a fault. Nothing crashes, no node is lost, and the cluster
-stays perfectly healthy while doing the wrong thing.
+A lab that stands up Grafana, renders dashboards and declares success has proven
+that Grafana renders. Observability failures are silent by construction — a
+broken alerting pipeline looks exactly like a quiet night, and the absence of
+alerts is indistinguishable from the absence of problems.
 
-Worse, the machinery from Labs 1 and 2 works *against* recovery. Quorum commit
-makes the bad migration durable before it is acknowledged, replication carries it
-to both standbys in milliseconds, and a failover hands over a healthy node
-carrying the same broken schema. **No node is left holding the old state.** Every
-guarantee the earlier labs worked to establish is what removes the escape route.
+What makes this testable is something the series already has: **a fault
+injection suite**. Labs 1 and 2 can kill a VM, kill PostgreSQL, freeze Patroni
+until the watchdog resets the node, cut a node off from etcd, and stop both
+standbys. So the criterion is not "are there dashboards" but:
 
-Only a backup answers it, which is why this lab comes last and composes Labs 3 to
-6 rather than repeating them.
+> For every fault the labs can inject, monitoring must raise a specific alert
+> within a measured time — and must raise none of them on a healthy cluster.
 
-## What is actually being protected against
+## The failures that actually need this
 
-PostgreSQL has transactional DDL, and Flyway wraps each migration in a
-transaction. **A migration that crashes rolls back on its own.**
+Most faults in Labs 1 and 2 are self-healing. Kill a node, Patroni promotes,
+service returns in about a minute. Detection latency barely matters when recovery
+is automatic and already measured.
 
-So nothing here protects against a migration *failing*. It protects against one
-that **succeeded and was wrong** — which is a narrower and more specific risk
-than "we need backups for migrations", and worth stating plainly because it
-determines how much of the machinery below is needed.
+Two failures are different, and they are the point of this lab:
 
-## You take a marker, not a backup
-
-With Lab 3's WAL archiving already running, a full backup before every migration
-is slow and mostly pointless: the base backup exists. What is missing is a
-precise, named point to replay to.
-
-```sql
-SELECT pg_create_restore_point('before_v42_add_orders_index');
-SELECT pg_switch_wal();
-```
-
-The `pg_switch_wal()` is not decoration. A restore point is a record inside the
-*current* WAL segment; if that segment is never archived, the marker is not in
-the repository when it is needed. `archive_timeout = 60s` gets there eventually,
-and forcing the switch means not having to hope.
-
-An LSN captured with `pg_current_wal_lsn()` is equally precise and read-only, if
-writing to the primary before a migration is unwelcome. Timestamps are the weak
-option: clock skew, and no way to separate two events in the same second.
-
-## Three instruments, escalating
-
-The mistake is reaching for the last one first. Rewinding the cluster to the
-marker discards **every transaction committed since** — including all the
-unrelated business that happened while the problem was being diagnosed.
-
-| Instrument | Cost to take | Recovers | Loses |
-| --- | --- | --- | --- |
-| `pg_dump --schema-only` | seconds | nothing | — it tells you *what changed* |
-| Targeted `pg_dump` of affected tables | seconds to minutes | those tables | nothing else |
-| Named restore point + PITR | milliseconds | the whole cluster | every commit since the marker |
-
-```sh
-# The scalpel: only the tables the migration touched.
-pg_dump --format=custom --table=orders --table=order_lines appdb > pre_v42.dump
-
-# The emergency brake: everything, back to the marker.
-pgbackrest restore --type=name --target=before_v42_add_orders_index
-```
-
-This is the concrete reason [Lab 3](../lab3/README.md) carries both pgBackRest
-and `pg_dump`. One is a time machine; the other is a scalpel. A lab holding only
-the physical backup would be forced to discard a day of unrelated work to undo
-two mangled tables.
-
-## Scope
-
-| In scope | Out of scope |
+| Failure | Why monitoring is the only defence |
 | --- | --- |
-| A migration that applies cleanly and is semantically wrong | A migration that fails or crashes — transactional DDL already handles it |
-| Restore point and LSN markers, and getting them into the repository | Logical decoding or trigger-based undo |
-| Targeted table-level recovery from a logical dump | Restoring into a different major version |
-| Full-cluster PITR to the marker, and **measuring what it discards** | Automating the choice between the two paths |
-| Rejoining the cluster afterwards | Blue/green database cutover |
+| **Writes blocked on synchronous replication** | With [`synchronous_mode_strict`](../SLA.md#the-exception-being-closed), losing both standbys stops writes until someone intervenes. Nothing recovers on its own |
+| **Backups silently stopped** | Nothing throws. The repository simply stops filling, and it is discovered when a restore is needed |
+
+Both share the property that makes them dangerous: **no error is raised**. The
+system quietly stops doing something it was supposed to keep doing.
+
+The first has an exact signal, observed while building Lab 1 rather than guessed:
+
+```text
+synchronous_standby_names = 'ANY 1 (*)'   and   backends in wait_event = SyncRep
+```
+
+`ANY 1 (*)` is Patroni's unsatisfiable placeholder. It cannot occur on a healthy
+cluster, so an alert on it has no false-positive mode.
+
+## What is monitored
+
+| Component | Source | Notes |
+| --- | --- | --- |
+| Patroni | **native `/metrics` on 8008** | No exporter. `patroni_primary`, `patroni_cluster_unlocked`, `patroni_pending_restart`, xlog location |
+| etcd | **native `/metrics` on 2379** | `etcd_server_has_leader`, `leader_changes_seen_total`, and backend fsync duration — which is the number Lab 2's separate-volume decision was made to protect |
+| PostgreSQL | `postgres_exporter` | Replication lag, `sync_state`, backends in `SyncRep`, connections against `max_connections` |
+| Node | `node_exporter` | Disk free on the LUKS volumes, CPU, memory |
+| pgBackRest | no native exporter — see below | |
+
+Two integration points fall out of Lab 2 rather than being invented here. Its
+Patroni REST API and etcd both require **client certificates**, so the collector
+needs its own identity issued from the existing CA — the second use of the "one
+CA, extended" decision recorded in [`lab2/PLAN.md`](../lab2/PLAN.md). And
+`postgres_exporter` needs a least-privilege monitoring login, on the same
+reasoning that gave the application `app_runtime` rather than a superuser — the
+`monitoring` role in [`SERVICE-ACCOUNTS.md`](../SERVICE-ACCOUNTS.md).
+
+## pgBackRest
+
+Called out separately because its failure mode is unlike everything else here:
+the failure is an **absence of activity**, not the presence of an error. Two
+complementary sources, because neither alone is sufficient:
+
+| Source | Answers |
+| --- | --- |
+| `pg_stat_archiver` (native PostgreSQL) | Is WAL archiving working *right now*? `archived_count`, `failed_count`, `last_failed_time` |
+| `pgbackrest info --output=json`, parsed to a textfile collector | When did a backup last *succeed*? Age, type, repository size |
+
+The headline metric is the **age of the last successful backup**, and the alert
+is on staleness rather than on any error. `pg_stat_archiver` gives the earliest
+warning that `archive_command` has broken; the backup age is what catches a
+repository that quietly stopped filling.
+
+## Logs, and Alloy
+
+Alloy runs on each node doing both jobs — scraping metrics and shipping logs —
+so there is one collector to configure, certificate, and monitor.
+
+Worth collecting: PostgreSQL (`csvlog`), the `percona-patroni` journal where
+elections, promotions and self-demotions are recorded, etcd, pgBackRest, and the
+kernel journal.
+
+One limitation is worth testing rather than assuming. A softdog reset kills the
+node abruptly, so the last seconds of log may never be shipped. Whether a
+watchdog reset can be explained *after the fact* is a real question about this
+design, and Lab 7 should answer it honestly rather than assume the logs are there.
+
+## Topology
+
+The LGTM stack runs on the control machine, not in more VMs — the same reasoning
+that puts MinIO there for Lab 3, and that ruled out a Tang server in Lab 2.
+Grafana's `otel-lgtm` image bundles Grafana, Mimir, Loki and Tempo in one
+container, reachable from the guests at the Lima shared-network gateway.
 
 ## Acceptance criteria
 
 | ID | Property | Pass condition |
 | --- | --- | --- |
-| AC-1 | The marker survives to the repository | After `pg_create_restore_point` and `pg_switch_wal`, the marker is present in archived WAL — verified from the repository, not from the primary's memory |
-| AC-2 | A bad migration is invisible to every HA mechanism | After it applies: one leader, two streaming standbys, no alert, no failover — and **both standbys carry the same broken schema** |
-| AC-3 | Table-level recovery loses nothing else | Restore the affected tables from the targeted dump; rows written to *other* tables after the migration are still present |
-| AC-4 | Full PITR reaches the marker exactly | The restored cluster has the pre-migration schema, contains every transaction committed before the marker, and none committed after |
-| AC-5 | The cost is measured, not described | Report how many committed transactions AC-4 discarded, and how long the cluster was unavailable |
+| AC-1 | Every component is observable | Metrics present from Patroni, etcd, PostgreSQL, the node and pgBackRest; stopping one exporter is itself detected |
+| AC-2 | Every injectable fault is detected, and none are invented | Each fault from Labs 1 and 2 raises its specific alert, with the detection latency recorded; a healthy cluster raises none of them |
+| AC-3 | Backup failure is detected by absence | Breaking `archive_command` raises an alert; letting backup age exceed its threshold raises another |
+| AC-4 | A failover can be reconstructed from logs alone | Given only Loki, identify which node was primary, when it was lost, and which was promoted |
+| AC-5 | The monitoring pipeline is itself monitored | A stopped Alloy is detected rather than read as silence, and a deliberately fired alert is observed arriving |
 
-### AC-2 is the point of the lab
+### AC-2 is the one that matters
 
-It asserts a *negative*: that everything built in Labs 1, 2 and 8 stays quiet.
-Green health checks, no promotion, no alert — and the corruption faithfully
-replicated to both standbys. Until that is demonstrated, the case for this lab is
-theoretical.
+Its second half is what makes it more than a checklist. A rule that fires on
+everything detects every fault and is worthless; requiring silence on a healthy
+cluster is what separates detection from noise.
 
-### AC-5 is what stops it being a demo
+### AC-5 is the one usually skipped
 
-Any restore can be made to look successful. The number that matters is what it
-threw away. Without it, "we restored to before the migration" sounds like a clean
-recovery instead of the trade it is.
+Every other criterion assumes the pipeline works. If Alloy dies, or an alert
+fires into a void, the dashboards stay green and the cluster looks healthy —
+which is the specific failure this lab exists to rule out.
 
-## Notes specific to this cluster
+## What this contributes back
 
-- **Patroni must be paused before a PITR restore.** Restoring under a running
-  Patroni means it sees a node diverging from the DCS and tries to repair what
-  is deliberately being rewound. `patronictl pause` first, resume after.
-- **The standbys are not a recovery source.** They hold the same broken schema
-  within milliseconds. Rebuilding them from the restored primary is part of the
-  recovery, not an alternative to it.
-- **A restore rewinds the whole cluster, including other databases.** If `appdb`
-  shares the cluster with anything else, PITR takes that back too — which is an
-  argument for the scalpel wherever it suffices.
-- **`synchronous_mode_strict` affects the rebuild.** A freshly restored primary
-  with no standby attached cannot accept writes until one rejoins. Expected
-  behaviour, and worth knowing before it looks like a failed restore.
+[`SLA.md`](../SLA.md) measures recovery time and says nothing about detection
+time. For self-healing faults that is fine. For the two failures above it is
+half the answer: their real RTO is *detect + decide + act*, and only the last
+part is currently measured.
+
+Lab 7's output is therefore a detection-latency column in `SLA.md`, which is what
+makes it a measurement rather than a dashboard exercise.
+
+## Open decisions
+
+| Question | Consideration |
+| --- | --- |
+| **Tempo and traces** | Only earn their place if the .NET client is instrumented. Then a failover is visible from the client's side — "retried 16 times" correlated with "Patroni promoted pg3" on one timeline, which metrics cannot show. The cost is real .NET work |
+| **Alert delivery** | Proving an alert *fires* is easy; proving it *arrives* needs a destination. A local webhook receiver keeps AC-5 self-contained and assertable |

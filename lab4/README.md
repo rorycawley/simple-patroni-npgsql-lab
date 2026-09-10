@@ -25,15 +25,15 @@ That is why the loss here is deliberately brutal, and why the restore goes onto
 fresh VMs. A rebuild onto the original machines, with the original configuration
 still lying around, quietly assumes away most of a real disaster.
 
-## The boundary with Lab 7
+## The boundary with Lab 6
 
 | | Question | State of the cluster |
 | --- | --- | --- |
 | **Lab 4** | Can we get the **cluster** back? | Gone |
-| **[Lab 7](../lab7/README.md)** | Can we get the **right data** back? | Perfectly healthy, doing the wrong thing |
+| **[Lab 6](../lab6/README.md)** | Can we get the **right data** back? | Perfectly healthy, doing the wrong thing |
 
 Recovery from *loss* here; recovery from a *mistake* there. Lab 4 establishes
-that point-in-time recovery works at all, which is what lets Lab 7 use it to
+that point-in-time recovery works at all, which is what lets Lab 6 use it to
 reach a chosen marker and argue about what that costs.
 
 ## What "total loss" means here
@@ -88,7 +88,7 @@ column is not a recovery plan.
 
 | In scope | Out of scope |
 | --- | --- |
-| Total loss: VMs, volumes and local secrets destroyed | Recovering from a bad migration — that is [Lab 7](../lab7/README.md) |
+| Total loss: VMs, volumes and local secrets destroyed | Recovering from a bad migration — that is [Lab 6](../lab6/README.md) |
 | Restore onto fresh VMs with new addresses | Restoring into a different PostgreSQL major version |
 | Point-in-time recovery, proven on both sides of the target | Cross-region or offsite repository replication |
 | Rebuilding a replacement replica from the repository | Automated or unattended recovery |
@@ -109,7 +109,7 @@ column is not a recovery plan.
 
 A restore that includes **too much** is as wrong as one that includes too
 little, and only the "absent" half detects it. It is also the half
-[Lab 7](../lab7/README.md) depends on, where discarding everything after the
+[Lab 6](../lab6/README.md) depends on, where discarding everything after the
 marker is the entire point rather than an accident.
 
 ### AC-3 is the bar this lab refuses to lower
@@ -147,9 +147,9 @@ detect its own corruption, which is otherwise an assumption.
 ## What this contributes back
 
 [`SLA.md`](../SLA.md) currently records the RTO for corruption, deletion and bad
-migrations as **not established**, sourced to "Labs 3, 4, 7 — not built". Lab 4
+migrations as **not established**, sourced to "Labs 3, 4, 6 — not built". Lab 4
 is what replaces that with a measured number, in the same way
-[Lab 8](../lab8/README.md) is what supplies detection latency.
+[Lab 7](../lab7/README.md) is what supplies detection latency.
 
 Until then the honest position stands: the labs can state how fast the cluster
 recovers from a node it lost, and cannot yet state how fast it recovers from

@@ -18,7 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| `lab3/` … `lab8/README.md` ([3](lab3/README.md), [4](lab4/README.md), [5](lab5/README.md), [6](lab6/README.md), [7](lab7/README.md), [8](lab8/README.md)) | Those labs' designs and acceptance criteria — specified ahead of being built |
+| `lab3/` … `lab7/README.md` ([3](lab3/README.md), [4](lab4/README.md), [5](lab5/README.md), [6](lab6/README.md), [7](lab7/README.md)) | Those labs' designs and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 
@@ -30,10 +30,9 @@ Each file below owns one subject and does not repeat another's.
 | [2](lab2/README.md) | Everything Lab 1 proves, on encrypted disks and an encrypted network | LUKS2, separate volumes for PostgreSQL and etcd | TLS on every channel, mutual where the peer is a machine | 4 |
 | [3](lab3/README.md) — specified, not built | Durable backups: pgBackRest **and** `pg_dump` to a MinIO repository, off the database hosts, encrypted and reached over TLS | — | — | — |
 | [4](lab4/README.md) — specified, not built | Recovery: total loss — VMs, volumes and local secrets destroyed — rebuilt onto fresh VMs from the repository alone | — | — | — |
-| [5](lab5/README.md) — specified, not built | Schema migration with Flyway on its own VM, and what survives a failover mid-migration | — | — | — |
-| [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
-| [7](lab7/README.md) — specified, not built | Recovering from a bad migration: mark before migrating, then recover by table or rewind the cluster | — | — | — |
-| [8](lab8/README.md) — specified, not built | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | — | — | — |
+| [5](lab5/README.md) — specified, not built | Schema migration with Flyway: without downtime, and what survives a failover mid-migration | — | — | — |
+| [6](lab6/README.md) — specified, not built | Recovering from a bad migration: mark before migrating, then recover by table or rewind the cluster | — | — | — |
+| [7](lab7/README.md) — specified, not built | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | — | — | — |
 
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
 network. Lab 2 removes that constraint.
@@ -59,44 +58,34 @@ is anything required for recovery stored solely inside the thing that was lost?
 The cipher passphrase, the CA, the passwords and the procedure itself all have to
 survive somewhere the disaster did not reach.
 
-[Lab 5](lab5/README.md) asks what a schema migration does when the primary moves
-underneath it, and its value is mostly in what it *disproves*. PostgreSQL's
-transactional DDL lets Flyway write the migration and its history row in one
-transaction, so they cannot disagree; its advisory lock is session-scoped, so a
-killed primary releases it. Both fears are largely inherited from other
-databases. The exception is sharp: `CREATE INDEX CONCURRENTLY` cannot run in a
-transaction, so an interrupted one leaves an `INVALID` index that a re-run will
-not clean up — and that is exactly the construct Lab 6 recommends for avoiding
-downtime. Zero-downtime advice and failover-safety advice point in opposite
-directions on that one statement.
+[Lab 5](lab5/README.md) covers schema migration, both ways it goes wrong: your
+migration interrupting your users, and the infrastructure interrupting your
+migration. The answer under test is that no downtime is needed — provided the
+schema stays compatible with both the current and previous application version,
+and every migration bounds its own lock wait. Compatibility is what makes an
+application rollback possible; taking downtime instead narrows the broken period
+but *forbids* rollback, because the old version can no longer run.
 
-[Lab 6](lab6/README.md) then asks whether the migration needed a maintenance
-window at all. The answer under test is no — provided the schema stays compatible
-with both the current and previous application version, and every migration
-bounds its own lock wait. Compatibility is what makes an application rollback
-possible; taking downtime instead narrows the broken period but *forbids*
-rollback, because the old version can no longer run. The lock bound is what stops
-a 10ms `ALTER TABLE` becoming a five-minute outage when it queues behind a long
-transaction and everything else queues behind it. It is the only lab specified in
-detail before being built, because the design is the deliverable — the pipeline
-itself is simulated by a script.
+Most of what people fear about a failover mid-migration cannot happen on
+PostgreSQL: transactional DDL lets Flyway write the migration and its history row
+in one transaction, and its advisory lock is session-scoped, so a killed primary
+releases it. The exception is sharp, and it is why these are one lab rather than
+two — `CREATE INDEX CONCURRENTLY` cannot run in a transaction, so an interrupted
+one leaves an `INVALID` index that a re-run will not clean up, and it is exactly
+the construct the zero-downtime half recommends. One instruction with a caveat,
+not two labs contradicting each other.
 
-Labs 5 and 6 divide cleanly: 5 is the infrastructure interrupting your migration,
-6 is your migration interrupting your users.
-
-[Lab 7](lab7/README.md) is the capstone, and the case every earlier lab is blind to. A bad
+[Lab 6](lab6/README.md) is the case every earlier lab is blind to. A bad
 migration is not a fault: nothing crashes, no node is lost, and the cluster stays
 perfectly healthy while doing the wrong thing. Worse, the machinery from Labs 1
 and 2 works *against* recovery — quorum commit makes the bad migration durable
 before it is acknowledged, replication carries it to both standbys in
 milliseconds, and failover just hands over a healthy node carrying the same
 broken schema. No node is left holding the old one. The only way back is the
-backup taken before the migration ran, restored to the moment before it started,
-which is why it comes last: it composes Labs 3, 4, 5 and 6 rather than repeating
-them.
+backup taken before the migration ran, restored to the moment before it started.
 
 It also has a cost worth stating rather than discovering: rewinding to just
-before the migration discards every transaction committed after it. Lab 7 has to
+before the migration discards every transaction committed after it. Lab 6 has to
 measure that window, not just prove the schema came back — which is why it holds
 two instruments rather than one. A targeted logical dump restores the tables the
 migration mangled and loses nothing else; full point-in-time recovery is the
@@ -106,7 +95,7 @@ The protection is narrower than it first sounds. Transactional DDL means a
 migration that *crashes* rolls back by itself, so what needs recovering is one
 that succeeded and was wrong.
 
-[Lab 8](lab8/README.md) is monitoring, and it is the easiest lab here to fake —
+[Lab 7](lab7/README.md) is monitoring, and it is the easiest lab here to fake —
 a green dashboard proves a dashboard renders, and a broken alerting pipeline
 looks exactly like a quiet night. What makes it testable is that the earlier
 labs can already break things on purpose, so the criterion becomes: every fault

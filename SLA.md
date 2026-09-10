@@ -130,14 +130,14 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
 | Every standby lost at once — *Lab 1, strict* | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
 | Every standby lost at once — *Lab 2, not yet strict* | **> 0, unbounded** | none; writes continue | non-strict behaviour, still to be replaced | configured |
-| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 7 — not built |
+| Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 6 — not built |
 
 **The last row is outside what HA can address.** Failover, fencing and quorum
 commit all assume a node stopped working. A bad migration or an erroneous
 `DELETE` is the cluster working correctly on a wrong instruction: replication
 carries it to every standby in milliseconds, and quorum commit makes it durable
 before it is acknowledged. No healthy node retains the old state. Only a backup
-answers it, which is why Labs 3, 4 and 7 exist and why that RTO is blank rather
+answers it, which is why Labs 3, 4 and 6 exist and why that RTO is blank rather
 than guessed.
 
 ## Where the numbers come from
