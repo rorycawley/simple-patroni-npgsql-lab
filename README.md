@@ -18,7 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| [`lab3/README.md`](lab3/README.md), [`lab4/README.md`](lab4/README.md), [`lab6/README.md`](lab6/README.md), [`lab7/README.md`](lab7/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
+| `lab3/` … `lab8/README.md` ([3](lab3/README.md), [4](lab4/README.md), [5](lab5/README.md), [6](lab6/README.md), [7](lab7/README.md), [8](lab8/README.md)) | Those labs' designs and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 
@@ -30,7 +30,7 @@ Each file below owns one subject and does not repeat another's.
 | [2](lab2/README.md) | Everything Lab 1 proves, on encrypted disks and an encrypted network | LUKS2, separate volumes for PostgreSQL and etcd | TLS on every channel, mutual where the peer is a machine | 4 |
 | [3](lab3/README.md) — specified, not built | Durable backups: pgBackRest **and** `pg_dump` to a MinIO repository, off the database hosts, encrypted and reached over TLS | — | — | — |
 | [4](lab4/README.md) — specified, not built | Recovery: total loss — VMs, volumes and local secrets destroyed — rebuilt onto fresh VMs from the repository alone | — | — | — |
-| 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
+| [5](lab5/README.md) — specified, not built | Schema migration with Flyway on its own VM, and what survives a failover mid-migration | — | — | — |
 | [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
 | [7](lab7/README.md) — specified, not built | Recovering from a bad migration: mark before migrating, then recover by table or rewind the cluster | — | — | — |
 | [8](lab8/README.md) — specified, not built | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | — | — | — |
@@ -59,16 +59,16 @@ is anything required for recovery stored solely inside the thing that was lost?
 The cipher passphrase, the CA, the passwords and the procedure itself all have to
 survive somewhere the disaster did not reach.
 
-Lab 5 asks what a schema migration does when the primary moves underneath it. A
-migration is a write, so Flyway has to find the primary exactly as the
-application does, and PostgreSQL's transactional DDL means a single migration
-either applies or it does not. The risk is not the DDL — it is the bookkeeping
-around it. Flyway records each migration in a history table and holds a lock
-while it runs, so a failover mid-migration can leave that history disagreeing
-with the schema, or leave the lock held so every later deployment blocks. This
-is Lab 1's uncertain-commit problem in a more damaging place: an interrupted
-migration that actually succeeded must not be recorded as failed, and must not
-be reapplied on the next run.
+[Lab 5](lab5/README.md) asks what a schema migration does when the primary moves
+underneath it, and its value is mostly in what it *disproves*. PostgreSQL's
+transactional DDL lets Flyway write the migration and its history row in one
+transaction, so they cannot disagree; its advisory lock is session-scoped, so a
+killed primary releases it. Both fears are largely inherited from other
+databases. The exception is sharp: `CREATE INDEX CONCURRENTLY` cannot run in a
+transaction, so an interrupted one leaves an `INVALID` index that a re-run will
+not clean up — and that is exactly the construct Lab 6 recommends for avoiding
+downtime. Zero-downtime advice and failover-safety advice point in opposite
+directions on that one statement.
 
 [Lab 6](lab6/README.md) then asks whether the migration needed a maintenance
 window at all. The answer under test is no — provided the schema stays compatible
