@@ -14,6 +14,10 @@ because they recover different disasters.
 
 ## What each one is for
 
+A fuller answer — what each produces, when *not* to use each, and the questions
+that come up — is in
+[`WHY_PGBACKREST_AND_PGDUMP.md`](../WHY_PGBACKREST_AND_PGDUMP.md). In short:
+
 They are not two backup systems. They do different jobs, and only one of them is
 the disaster recovery mechanism.
 

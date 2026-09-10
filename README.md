@@ -60,6 +60,7 @@ destroyed without the other.
 | [`lab3`](lab3/README.md) … [`lab7/README.md`](lab7/README.md) | Each of those labs' design and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
+| [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) | What each backup tool is for, when to use it, and when not to |
 
 ## The labs
 
