@@ -12,9 +12,10 @@ executable checks rather than prose.
 Two outcomes, stated precisely, because both are easy to overclaim.
 
 **1. No acknowledged transaction is lost to infrastructure failure.** Quorum
-commit with `synchronous_mode_strict` means a commit is not acknowledged until a
-second node holds it, so no node failure, promotion or fence can lose one. Page
-checksums catch corruption before it is replicated and copied into every backup.
+commit means a commit is not acknowledged until a second node holds it, so no
+node failure, promotion or fence can lose one; `synchronous_mode_strict` removes
+the one case where that guarantee used to lapse ([enabled in Lab 1, not yet in
+Lab 2](#durability)). Page checksums catch corruption before it is replicated and copied into every backup.
 Backups and a rehearsed restore cover losing every node at once.
 
 Two things sit outside that claim, deliberately:
@@ -53,7 +54,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| `lab3/` … `lab7/README.md` ([3](lab3/README.md), [4](lab4/README.md), [5](lab5/README.md), [6](lab6/README.md), [7](lab7/README.md)) | Those labs' designs and acceptance criteria — specified ahead of being built |
+| [`lab3`](lab3/README.md) … [`lab7/README.md`](lab7/README.md) | Each of those labs' design and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 

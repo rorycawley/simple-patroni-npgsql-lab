@@ -1,5 +1,9 @@
 # Lab 1: the simplest cluster that survives failover
 
+> **Status: built and verified.** `make all` builds from nothing and runs every
+> check, including the mutation test that proves `synchronous_mode_strict`
+> blocks rather than degrades.
+
 The shared components, cluster design, failover semantics and prerequisites are
 in the [top-level README](../README.md). This file covers Lab 1 only.
 
@@ -283,26 +287,30 @@ From an empty machine:
 ==============================================================================
  Lab 1 results
 ==============================================================================
- PASS  Create the three Lima VMs                                         3m30s
- PASS  Install and configure the Patroni cluster                         6m43s
+ PASS  Create the three Lima VMs                                         4m02s
+ PASS  Install and configure the Patroni cluster                         5m18s
  PASS  Cluster services, quorum, replication, pgBackRest                    6s
  PASS  Criterion 1: client connects to the primary and queries it           1s
  PASS  Client guarantees: pool limit, timeouts, no blind retry             18s
- PASS  Quorum commit: configured, blocking, strict, and lossless         3m11s
- PASS  Criterion 2: failover after the primary VM is lost                  57s
- PASS  Criterion 2: failover after PostgreSQL is killed                    14s
- PASS  Split brain: softdog fences a frozen Patroni                        42s
- PASS  Split brain: Patroni demotes itself without etcd                    47s
+ PASS  Quorum commit: configured, blocking, strict, and lossless         3m16s
+ PASS  Criterion 2: failover after the primary VM is lost                  55s
+ PASS  Criterion 2: failover after PostgreSQL is killed                     8s
+ PASS  Split brain: softdog fences a frozen Patroni                        34s
+ PASS  Split brain: Patroni demotes itself without etcd                    57s
 ------------------------------------------------------------------------------
- 10 passed, 0 failed, total 14m06s
+ 10 passed, 0 failed, total 15m35s
 ==============================================================================
 ```
 
 That is a first run with nothing cached: it downloads the Rocky image and
 installs PostgreSQL, Patroni, etcd and pgBackRest on all three nodes. Rerunning
-`make all` against existing VMs takes about four minutes, because VM creation and
+`make all` against existing VMs takes about six minutes, because VM creation and
 package installation both become no-ops — the two setup phases drop to seconds,
 while the checks take the same time either way.
+
+The quorum-commit check dominates the rest because its `strict` tier stops both
+standbys outright and waits for Patroni to reconcile, twice: once with
+`synchronous_mode_strict` on and once with it off.
 
 ### Individual phases
 

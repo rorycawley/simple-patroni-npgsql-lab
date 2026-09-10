@@ -1,8 +1,10 @@
 # Lab 2: encrypted at rest and in transit
 
-> **Status: built and verified.** `make all` reports every check green from
-> scratch. Where the result differs from the original plan the reason is stated
-> below rather than the plan quietly rewritten.
+> **Status: built and verified.** AC-1 to AC-3 passed on all seven consecutive
+> from-scratch builds; AC-4 passed on six of seven — the
+> [aggregate is below](#run), rather than a single green run left to imply
+> reliability. Where the result differs from the original plan the reason is
+> stated below rather than the plan quietly rewritten.
 
 The shared components, cluster design, failover semantics and prerequisites are
 in the [top-level README](../README.md). This file covers Lab 2 only: what it
@@ -31,8 +33,13 @@ to anyone on the wire between components.
 | — | Backups. pgBackRest is carried over from Lab 1 unchanged, and its local repository is left as it is; encrypting it and moving it off the database hosts are Lab 3, and restoring from it is Lab 4 |
 
 Everything Lab 1 asserts about failover, fencing, quorum commit and the client's
-configured limits is inherited unchanged and re-run here. It is documented in the
+configured limits is re-run here and documented in the
 [Lab 1 guide](../lab1/README.md) rather than repeated.
+
+One difference, until it is ported: Lab 1 now sets `synchronous_mode_strict`, so
+it blocks writes rather than degrading to asynchronous when no standby can
+confirm. **Lab 2 does not yet**, and so still has the exception described in
+[`SLA.md`](../SLA.md#the-exception-being-closed).
 
 ## Data at rest
 
