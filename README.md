@@ -61,6 +61,7 @@ destroyed without the other.
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 | [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) | What each backup tool is for, when to use it, when not to, and what to do before a manual change |
+| [`RUNBOOKS.md`](RUNBOOKS.md) | What to do *during* an incident, each procedure marked verified, reasoned, or stub |
 
 ## The labs
 

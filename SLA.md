@@ -103,7 +103,8 @@ Two operating conditions come with the decision, and both are requirements
 rather than caveats:
 
 - **It presents as a hang, not an error.** A blocked commit waits; it does not
-  fail fast. Clients need a command timeout or their pools fill and the
+  fail fast. [`RUNBOOKS.md`](RUNBOOKS.md) has the procedure for recognising and
+  clearing it. Clients need a command timeout or their pools fill and the
   application stalls, turning a database problem into an application-wide
   outage. The lab client sets `Command Timeout=10`, which is why this is
   survivable here — the same timeout that bounds a stalled node also bounds a

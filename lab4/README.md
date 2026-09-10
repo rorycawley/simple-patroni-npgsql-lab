@@ -64,7 +64,10 @@ What must survive, and the failure if it does not:
 | The procedure itself | Everything above exists and nobody knows the order |
 
 The last row is not a joke. A recovery that depends on one person's memory has a
-single point of failure the architecture diagram does not show.
+single point of failure the architecture diagram does not show. The procedures
+live in [`RUNBOOKS.md`](../RUNBOOKS.md), where this one is still a **stub** —
+writing confident steps for a restore nobody has performed is the failure this
+lab exists to prevent.
 
 ## Restoring onto fresh VMs
 
