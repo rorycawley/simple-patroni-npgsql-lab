@@ -1,0 +1,68 @@
+---
+# Ships each node the CA certificate and its own four identities, and nothing
+# else. The CA private key stays on the control machine: a node that could sign
+# certificates could mint any identity in the cluster.
+#
+# Ownership follows the service that reads the key, because PostgreSQL and etcd
+# both refuse to start on a key that is group- or world-readable.
+
+- name: Ensure the lab configuration directory is traversable
+  ansible.builtin.file:
+    path: "{{ lab3_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the PKI directory
+  ansible.builtin.file:
+    path: "{{ lab3_pki_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the CA certificate
+  ansible.builtin.copy:
+    src: "{{ lab3_pki_source }}/ca.crt"
+    dest: "{{ lab3_pki_dir }}/ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install this node's certificates
+  ansible.builtin.copy:
+    src: "{{ lab3_pki_source }}/{{ lab3_node_name }}-{{ item.name }}.crt"
+    dest: "{{ lab3_pki_dir }}/{{ item.name }}.crt"
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "0644"
+  loop: "{{ lab3_tls_identities }}"
+  loop_control:
+    label: "{{ item.name }}.crt"
+
+- name: Install this node's private keys
+  ansible.builtin.copy:
+    src: "{{ lab3_pki_source }}/{{ lab3_node_name }}-{{ item.name }}.key"
+    dest: "{{ lab3_pki_dir }}/{{ item.name }}.key"
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "0600"
+  loop: "{{ lab3_tls_identities }}"
+  loop_control:
+    label: "{{ item.name }}.key"
+  no_log: true
+
+- name: Assert the CA private key was never shipped
+  ansible.builtin.stat:
+    path: "{{ lab3_pki_dir }}/ca.key"
+  register: lab3_ca_key_on_node
+
+- name: Fail if a guest holds the CA private key
+  ansible.builtin.assert:
+    that:
+      - not lab3_ca_key_on_node.stat.exists
+    fail_msg: >-
+      {{ inventory_hostname }} holds the CA private key. Any node able to sign
+      could mint every identity in the cluster; the key belongs only on the
+      control machine.

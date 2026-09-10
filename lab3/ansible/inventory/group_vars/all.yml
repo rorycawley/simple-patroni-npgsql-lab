@@ -1,0 +1,102 @@
+---
+lab3_cluster_name: lab3
+lab3_patroni_namespace: /service/
+lab3_postgres_data_dir: /var/lib/pgsql/data
+lab3_postgres_bin_dir: /usr/pgsql-18/bin
+lab3_etcd_data_dir: /var/lib/etcd/lab3
+
+# Each service's data directory sits on its own block device. Sizes must stay
+# distinct from each other and from the root disk: the guest resolves which
+# device is which by size, because attachment order is not a contract.
+lab3_volume_fstype: xfs
+lab3_config_dir: /etc/lab3
+lab3_luks_key_dir: "{{ lab3_config_dir }}/luks"
+
+# TLS material. One certificate per purpose rather than one per node, so that a
+# stolen key for one service cannot authenticate as another. The owner is the
+# service that reads the key: PostgreSQL and etcd both refuse to start on a key
+# that is group- or world-readable.
+lab3_pki_dir: "{{ lab3_config_dir }}/pki"
+# etcd requires a client certificate once client-cert-auth is on, so every
+# etcdctl invocation needs these. Defined once rather than per call site.
+lab3_etcdctl_tls: >-
+  --cacert {{ lab3_pki_dir }}/ca.crt
+  --cert {{ lab3_pki_dir }}/etcd.crt
+  --key {{ lab3_pki_dir }}/etcd.key
+# Backup repository (Lab 3). The object store runs on the control machine and is
+# reached at the Lima shared-network gateway -- the same address the firewall
+# already permits for psql debugging. Port 9100 rather than the MinIO default of
+# 9000, because the sibling lab occupies that and either lab must be buildable
+# while the other runs.
+lab3_repo_bucket: lab3-backups
+lab3_repo_path: /pgbackrest
+lab3_repo_endpoint: "{{ lab3_host_gateway_ip }}"
+lab3_repo_port: 9100
+lab3_repo_region: us-east-1
+lab3_repo_uri_style: path
+
+# The backup job. Installed on all three nodes; the leader gate decides which
+# one actually runs it. Intervals are compressed so a single `make all` run
+# observes a real chain -- a full plus incrementals -- rather than one backup.
+# A production cluster would take the full weekly and incrementals nightly.
+lab3_backup_bin_dir: /usr/local/lib/lab3
+lab3_patroni_rest_port: 8008
+lab3_backup_full_on_boot: 90s
+lab3_backup_full_interval: 30min
+lab3_backup_incr_on_boot: 3min
+lab3_backup_incr_interval: 2min
+
+# The logical dump. Its prefix sits OUTSIDE repo1-path so pgBackRest's retention
+# can never reap it -- which also makes expiring old dumps this lab's own job.
+lab3_appdb_name: appdb
+lab3_dump_prefix: dumps
+lab3_dump_pass_file: "{{ lab3_config_dir }}/dump.pass"
+lab3_dump_retention: 3
+lab3_dump_on_boot: 2min
+lab3_dump_interval: 10min
+
+lab3_app_dir: /opt/lab3-client
+lab3_app_secrets_dir: /etc/lab3/client
+lab3_app_publish_dir: "{{ playbook_dir }}/../../client/publish/linux-arm64"
+lab3_pki_source: "{{ playbook_dir }}/../../.secrets/pki"
+lab3_tls_identities:
+  - name: postgres
+    owner: postgres
+  - name: patroni
+    owner: postgres
+  - name: dcs-client
+    owner: postgres
+  - name: etcd
+    owner: etcd
+lab3_data_volumes:
+  - name: pgdata
+    path: /var/lib/pgsql
+    gib: 10
+  - name: etcd
+    path: /var/lib/etcd
+    gib: 5
+lab3_lima_management_cidr: 192.168.5.0/24
+
+# The macOS side of Lima's managed shared network. It is the only non-cluster
+# source allowed to reach PostgreSQL, in both the firewall and pg_hba, so a wrong
+# value locks the client out with a bare connection timeout. Lima puts macOS on
+# <shared subnet>.1, which the playbooks derive from the VM addresses; set this
+# override if your Lima network uses a different gateway address.
+lab3_host_gateway_ip_override: ""
+
+# The application VM is where the client now runs, so that is what must reach
+# PostgreSQL. The macOS gateway stays allowed for psql debugging: it uses
+# OpenSSL and can negotiate TLS 1.3, unlike .NET on macOS.
+lab3_postgres_client_cidrs:
+  - "{{ hostvars[groups['app_nodes'][0]].lab3_node_ip }}/32"
+  - "{{ lab3_host_gateway_ip }}/32"
+
+lab3_firewall_interfaces:
+  - eth0
+  - lima0
+
+lab3_cluster_ports:
+  - 2379 # etcd client
+  - 2380 # etcd peer
+  - 5432 # PostgreSQL and streaming replication
+  - 8008 # Patroni REST API

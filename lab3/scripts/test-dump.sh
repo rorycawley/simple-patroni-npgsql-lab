@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# AC-4: a dump proves the data is READABLE, not merely present.
+# AC-5, second half: the dumps are encrypted too.
+#
+# The second half is the one that is easy to miss. repo1-cipher-pass protects
+# only what pgBackRest writes, and these objects are deliberately written outside
+# repo1-path so pgBackRest's retention can never reap them. A criterion that
+# checked the pgBackRest objects and stopped would leave the dumps sitting in
+# plaintext beside them and still pass, having tested the easier half of the data.
+#
+# Reloading into a scratch database is not a restore rehearsal -- that is Lab 4.
+# It is the cheapest available proof that the dump can still be PARSED, which is
+# the property `pgbackrest verify` cannot give: verifying checksums confirms the
+# bytes are intact and says nothing about whether PostgreSQL can read them.
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly VM_NAMES=(lab3-pg1 lab3-pg2 lab3-pg3)
+readonly VM_PREFIX="lab3-"
+readonly STANZA=lab3
+readonly PATRONI_CONFIG=/etc/patroni/patroni.yml
+readonly BIN=/usr/local/lib/lab3
+readonly PASSFILE=/etc/lab3/dump.pass
+readonly PGBIN=/usr/pgsql-18/bin
+readonly SCRATCH=dump_reload_probe
+
+command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+[[ -f "$LAB_DIR/.env" ]] || { echo "Run make create_vms first" >&2; exit 1; }
+
+failures=0
+pass() { echo "  ok: $1"; }
+fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
+on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
+
+leader_vm() {
+  local out
+  for vm in "${VM_NAMES[@]}"; do
+    if out="$(on "$vm" sudo -u postgres patronictl -c "$PATRONI_CONFIG" list --format=json)"; then
+      printf '%s%s\n' "$VM_PREFIX" \
+        "$(jq -r '.[] | select(.Role | test("Leader")) | .Member' <<< "$out")"
+      return 0
+    fi
+  done
+  return 1
+}
+
+leader="$(leader_vm)" || { echo "cannot find the leader" >&2; exit 1; }
+cleanup() {
+  on "$leader" sudo -u postgres "$PGBIN/psql" -Atc "DROP DATABASE IF EXISTS $SCRATCH" >/dev/null 2>&1
+  on "$leader" sudo rm -f /tmp/lab3-dump-probe.enc /tmp/lab3-dump-probe >/dev/null 2>&1
+}
+trap cleanup EXIT
+
+echo
+echo "=== A dump is taken, and only by the leader ==="
+echo "  leader is ${leader#$VM_PREFIX}"
+before="$(on "$leader" sudo "$BIN/lab3-s3" list dumps/ | wc -l | tr -d ' ')"
+
+for vm in "${VM_NAMES[@]}"; do
+  out="$(on "$vm" sudo systemctl start lab3-dump.service 2>&1)"; rc=$?
+  (( rc == 0 )) || fail "${vm#$VM_PREFIX}: the dump unit failed: $out"
+done
+
+for vm in "${VM_NAMES[@]}"; do
+  [[ "$vm" == "$leader" ]] && continue
+  on "$vm" journalctl -u lab3-dump.service -n 10 --no-pager | grep -q "Leader confirmed" \
+    && fail "${vm#$VM_PREFIX}: a standby took a dump" \
+    || pass "${vm#$VM_PREFIX}: declined, as a non-leader must"
+done
+
+keys="$(on "$leader" sudo "$BIN/lab3-s3" list dumps/ | sort)"
+newest="$(printf '%s\n' "$keys" | tail -1)"
+[[ -n "$newest" ]] && pass "a dump is in the bucket: $newest" \
+                   || { fail "no dump object was produced"; exit 1; }
+
+echo
+echo "=== pgBackRest cannot see the dumps, and never expires them ==="
+# The prefix sits outside repo1-path on purpose. If pgBackRest could see these,
+# its retention would eventually reap the very thing kept for surgical recovery.
+if on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" repo-ls 2>/dev/null | grep -q '^dumps$'; then
+  fail "the dumps prefix is inside the pgBackRest repository; expire could reap it"
+else
+  pass "the dumps prefix is outside repo1-path, beyond expire's reach"
+fi
+
+echo
+echo "=== The dump is unreadable straight from the bucket ==="
+# Straight from the bucket, with no decryption step: whatever an object-store
+# administrator would see. Fetched to a file rather than piped, so nothing
+# depends on xxd (absent from a minimal image) or on surviving SIGPIPE.
+on "$leader" sudo bash -c "$BIN/lab3-s3 cat '$newest' > /tmp/lab3-dump-probe.enc"
+raw_head="$(on "$leader" sudo bash -c \
+  "head -c 8 /tmp/lab3-dump-probe.enc | od -An -v -tx1 | tr -d ' \n'")"
+if [[ "$raw_head" == 53616c7465645f5f ]]; then
+  pass "it begins 'Salted__': encrypted, not a pg_dump archive"
+else
+  # A custom-format pg_dump archive begins with the magic "PGDMP".
+  if [[ "$raw_head" == 5047444d50* ]]; then
+    fail "the object in the bucket begins 'PGDMP': the dump was uploaded in PLAINTEXT"
+  else
+    fail "unexpected first bytes in the bucket: $raw_head"
+  fi
+fi
+
+echo
+echo "=== With its passphrase it decrypts, parses, and reloads ==="
+on "$leader" sudo bash -c "
+  openssl enc -d -aes-256-cbc -pbkdf2 -in /tmp/lab3-dump-probe.enc \
+    -out /tmp/lab3-dump-probe -pass file:$PASSFILE" >/dev/null 2>&1 \
+  && pass "decrypts with the dump passphrase" \
+  || { fail "could not decrypt the dump"; exit 1; }
+
+on "$leader" sudo -u postgres "$PGBIN/pg_restore" --list /tmp/lab3-dump-probe >/dev/null 2>&1 \
+  && pass "pg_restore can parse the archive" \
+  || fail "pg_restore cannot parse the decrypted archive"
+
+# The real assertion. Reading every row through PostgreSQL's own executor is
+# what a physical backup cannot do, and it is why this dump exists.
+source_rows="$(on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc \
+  "select count(*) from public.ha_probe")"
+on "$leader" sudo -u postgres "$PGBIN/psql" -Atc "DROP DATABASE IF EXISTS $SCRATCH" >/dev/null 2>&1
+on "$leader" sudo -u postgres "$PGBIN/psql" -Atc "CREATE DATABASE $SCRATCH" >/dev/null 2>&1
+on "$leader" sudo -u postgres "$PGBIN/pg_restore" -d "$SCRATCH" /tmp/lab3-dump-probe >/dev/null 2>&1
+restored_rows="$(on "$leader" sudo -u postgres "$PGBIN/psql" -d "$SCRATCH" -Atc \
+  "select count(*) from public.ha_probe")"
+
+if [[ -n "$restored_rows" && "$restored_rows" == "$source_rows" ]]; then
+  pass "reloaded into a scratch database: $restored_rows rows, matching the source"
+else
+  fail "reload produced '${restored_rows:-nothing}' rows, source has $source_rows"
+fi
+
+echo
+echo "=== Old dumps are expired by the job that wrote them ==="
+count="$(printf '%s\n' "$keys" | grep -c . || true)"
+keep="$(on "$leader" sudo sed -n 's/^readonly KEEP=//p' "$BIN/lab3-dump")"
+(( count <= keep )) \
+  && pass "$count dump(s) retained, within the limit of $keep" \
+  || fail "$count dumps retained but the limit is $keep; nothing is expiring them"
+
+echo
+(( failures == 0 )) && { echo "PASS"; exit 0; }
+echo "FAILED: $failures problem(s)" >&2
+exit 1

@@ -1,0 +1,82 @@
+namespace: {{ lab3_patroni_namespace }}
+scope: {{ lab3_cluster_name }}
+name: {{ lab3_node_name }}
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: {{ lab3_node_ip }}:8008
+  # verify_client: required makes this mutual. Patroni also uses these same
+  # files as its *client* certificate when polling other members' REST APIs,
+  # which is why the patroni identity carries both serverAuth and clientAuth.
+  certfile: {{ lab3_pki_dir }}/patroni.crt
+  keyfile: {{ lab3_pki_dir }}/patroni.key
+  cafile: {{ lab3_pki_dir }}/ca.crt
+  verify_client: required
+
+# patronictl runs as a client of the REST API above. Without this section every
+# patronictl invocation in the playbooks and test scripts fails the moment
+# verify_client is required.
+ctl:
+  certfile: {{ lab3_pki_dir }}/patroni.crt
+  keyfile: {{ lab3_pki_dir }}/patroni.key
+  cacert: {{ lab3_pki_dir }}/ca.crt
+  insecure: false
+
+etcd3:
+  hosts: {% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab3_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}
+
+  protocol: https
+  cacert: {{ lab3_pki_dir }}/ca.crt
+  # A dedicated client identity, not the etcd server certificate: clientAuth
+  # only, so it cannot be replayed to impersonate an etcd member.
+  cert: {{ lab3_pki_dir }}/dcs-client.crt
+  key: {{ lab3_pki_dir }}/dcs-client.key
+
+postgresql:
+  cluster_name: {{ lab3_cluster_name }}
+  listen: 0.0.0.0:5432
+  connect_address: {{ lab3_node_ip }}:5432
+  data_dir: {{ lab3_postgres_data_dir }}
+  bin_dir: {{ lab3_postgres_bin_dir }}
+  pgpass: /var/lib/pgsql/.pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: {{ postgres_replication_password | to_json }}
+      # Streaming replication crosses the network, so the replica verifies the
+      # primary rather than merely encrypting to it. The primary's certificate
+      # carries its IP in the SAN, which is what verify-full matches against.
+      sslmode: verify-full
+      sslrootcert: {{ lab3_pki_dir }}/ca.crt
+    superuser:
+      username: postgres
+      password: {{ postgres_superuser_password | to_json }}
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+  create_replica_methods:
+    - basebackup
+  basebackup:
+    checkpoint: fast
+
+watchdog:
+  mode: required
+  device: /dev/watchdog
+  safety_margin: 5
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
+
+# Keep this block last. Jinja drops the included file's trailing newline, so any
+# key rendered after the include would be appended to its final line instead of
+# starting its own. At end of file there is nothing to corrupt.
+bootstrap:
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  dcs:
+{% filter indent(4, true) %}
+{% include 'patroni-dcs.yml.j2' %}
+{% endfilter %}

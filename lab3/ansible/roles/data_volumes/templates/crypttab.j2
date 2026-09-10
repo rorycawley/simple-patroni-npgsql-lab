@@ -1,0 +1,7 @@
+# Managed by Ansible (data_volumes role).
+# Each volume unlocks unattended from a root-only keyfile, so a node reset by
+# the watchdog rejoins without an operator. The keyfile lives beside the data it
+# protects: this defends a detached or discarded disk, not a compromised host.
+{% for volume, uuid in lab3_crypttab_entries %}
+{{ volume.mapper }} UUID={{ uuid | trim }} {{ volume.keyfile }} luks
+{% endfor %}

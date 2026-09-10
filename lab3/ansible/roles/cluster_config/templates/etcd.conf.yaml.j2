@@ -1,0 +1,32 @@
+name: "{{ lab3_node_name }}"
+initial-cluster-token: "lab3-postgresql-ha"
+# etcd ignores every initial-cluster-* setting once its data directory holds a
+# member, so rerunning configure_cluster does not re-bootstrap a live cluster.
+# Wiping {{ lab3_etcd_data_dir }} would, which discards all Patroni state.
+initial-cluster-state: "new"
+initial-cluster: "{% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab3_node_name }}=https://{{ hostvars[host].lab3_node_ip }}:2380{% if not loop.last %},{% endif %}{% endfor %}"
+data-dir: "{{ lab3_etcd_data_dir }}"
+initial-advertise-peer-urls: "https://{{ lab3_node_ip }}:2380"
+listen-peer-urls: "https://{{ lab3_node_ip }}:2380"
+advertise-client-urls: "https://{{ lab3_node_ip }}:2379"
+listen-client-urls: "https://127.0.0.1:2379,https://{{ lab3_node_ip }}:2379"
+enable-v2: false
+
+# Mutual TLS on both APIs. client-cert-auth and peer-client-cert-auth are what
+# make it mutual: without them etcd would encrypt the connection but accept any
+# caller, which is transport security without authentication.
+client-transport-security:
+  cert-file: "{{ lab3_pki_dir }}/etcd.crt"
+  key-file: "{{ lab3_pki_dir }}/etcd.key"
+  trusted-ca-file: "{{ lab3_pki_dir }}/ca.crt"
+  client-cert-auth: true
+
+peer-transport-security:
+  cert-file: "{{ lab3_pki_dir }}/etcd.crt"
+  key-file: "{{ lab3_pki_dir }}/etcd.key"
+  trusted-ca-file: "{{ lab3_pki_dir }}/ca.crt"
+  client-cert-auth: true
+
+# etcd defaults to a TLS 1.2 floor. Patroni's REST API has no equivalent
+# setting, so this is the one place in P4 where a floor can be pinned.
+tls-min-version: TLS1.3

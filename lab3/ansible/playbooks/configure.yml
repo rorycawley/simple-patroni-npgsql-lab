@@ -1,0 +1,24 @@
+---
+- name: Configure the Lab 3 cluster services
+  hosts: patroni_nodes
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../../.secrets/cluster.yml"
+    # Deliberately a separate file outside .secrets/: the repository passphrase
+    # must outlive `make clean` and the cluster itself. See generate-secrets.sh.
+    - "{{ playbook_dir }}/../../.recovery-inputs/repo.yml"
+
+  pre_tasks:
+    - name: Record the three node IP addresses
+      ansible.builtin.set_fact:
+        lab3_peer_ips: "{{ groups['patroni_nodes'] | map('extract', hostvars, 'lab3_node_ip') | list }}"
+        lab3_host_gateway_ip: "{{ lab3_host_gateway_ip_override or (lab3_node_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
+
+  roles:
+    # Before cluster_config, whose templates reference these paths.
+    - role: tls_material
+    - role: cluster_config
+    # After cluster_config: the gate presents the patroni certificate that role
+    # installs, and the job reads the pgbackrest configuration it writes.
+    - role: backup_jobs

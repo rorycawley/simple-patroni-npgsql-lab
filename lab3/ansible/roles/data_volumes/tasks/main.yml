@@ -1,0 +1,170 @@
+---
+# Puts each service's data directory on its own LUKS2-encrypted block device.
+#
+# Lima does not hand additional disks over raw: it partitions each one, formats
+# it ext4 and mounts it under /mnt/lima-<disk>, with no /etc/fstab entry. So the
+# device has to be taken back before it can be encrypted.
+#
+# Devices are identified by size, not by attachment order or kernel name, since
+# neither is a contract. The sizes are required to be distinct.
+
+- name: Install cryptsetup
+  ansible.builtin.dnf:
+    name: cryptsetup
+    state: present
+  register: lab3_cryptsetup
+  retries: 5
+  delay: 15
+  until: lab3_cryptsetup is succeeded
+
+- name: Resolve each data volume to a block device by size
+  ansible.builtin.shell: |
+    set -o pipefail
+    lsblk -bdno NAME,SIZE --nodeps | awk -v want="{{ (item.gib | int) * 1024 * 1024 * 1024 }}" '
+      $2 >= want * 0.98 && $2 <= want * 1.02 { print "/dev/" $1 }'
+  args:
+    executable: /bin/bash
+  register: lab3_volume_devices
+  changed_when: false
+  loop: "{{ lab3_data_volumes }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.gib }}GiB)"
+
+- name: Assert exactly one device matched each volume
+  ansible.builtin.assert:
+    that:
+      - (item.stdout_lines | length) == 1
+    fail_msg: >-
+      Expected exactly one {{ item.item.gib }}GiB device for {{ item.item.name }},
+      found {{ item.stdout_lines | length }}. Data volume sizes must be distinct
+      from each other and from the root disk.
+  loop: "{{ lab3_volume_devices.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Build the volume map
+  ansible.builtin.set_fact:
+    lab3_volumes: >-
+      {{ lab3_volumes | default([]) + [item.item | combine({
+           'device': item.stdout_lines[0],
+           'mapper': 'lab3-' ~ item.item.name,
+           'keyfile': lab3_luks_key_dir ~ '/' ~ item.item.name ~ '.key'
+         })] }}
+  loop: "{{ lab3_volume_devices.results }}"
+  loop_control:
+    label: "{{ item.item.name }} -> {{ item.stdout_lines[0] }}"
+
+# Created explicitly and traversable. Left implicit, Ansible would create it
+# with the 0700 of the key directory below, and every service user would then be
+# unable to reach its certificates in the sibling pki directory -- which fails
+# as "permission denied" on a file whose own mode is perfectly correct.
+- name: Create the lab configuration directory
+  ansible.builtin.file:
+    path: "{{ lab3_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the LUKS key directory
+  ansible.builtin.file:
+    path: "{{ lab3_luks_key_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Generated on the node, so the key never crosses the network or touches the
+# control machine. It protects a detached or discarded disk image, not a live
+# host -- see the threat model in README.md.
+- name: Generate a keyfile for each volume
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 077
+    head -c 512 /dev/urandom > "{{ item.keyfile }}"
+    chmod 400 "{{ item.keyfile }}"
+  args:
+    executable: /bin/bash
+    creates: "{{ item.keyfile }}"
+  loop: "{{ lab3_volumes }}"
+  loop_control:
+    label: "{{ item.keyfile }}"
+
+- name: Encrypt, open and format each data volume
+  ansible.builtin.shell: |
+    set -euo pipefail
+    device="{{ item.device }}"
+    mapper="{{ item.mapper }}"
+    keyfile="{{ item.keyfile }}"
+    changed=""
+
+    if ! cryptsetup isLuks "$device"; then
+      # Take the device back from Lima before claiming it.
+      for mounted in $(findmnt -rno TARGET,SOURCE | awk -v d="$device" '$2 ~ "^"d {print $1}'); do
+        umount "$mounted"
+      done
+      wipefs -a "$device" >/dev/null
+      cryptsetup luksFormat --type luks2 --batch-mode --key-file "$keyfile" "$device"
+      changed="yes"
+    fi
+
+    if [ ! -e "/dev/mapper/$mapper" ]; then
+      cryptsetup luksOpen --key-file "$keyfile" "$device" "$mapper"
+      changed="yes"
+    fi
+
+    # Format only an unformatted mapper device, so a rerun against a live
+    # cluster cannot destroy it.
+    if [ "$(lsblk -dno FSTYPE "/dev/mapper/$mapper")" != "{{ lab3_volume_fstype }}" ]; then
+      mkfs.{{ lab3_volume_fstype }} -q -f "/dev/mapper/$mapper"
+      changed="yes"
+    fi
+
+    [ -n "$changed" ] && echo changed || true
+  args:
+    executable: /bin/bash
+  register: lab3_volume_luks
+  changed_when: "'changed' in lab3_volume_luks.stdout"
+  loop: "{{ lab3_volumes }}"
+  loop_control:
+    label: "{{ item.name }} on {{ item.device }}"
+
+- name: Read each volume's LUKS UUID
+  ansible.builtin.command: "cryptsetup luksUUID {{ item.device }}"
+  register: lab3_luks_uuids
+  changed_when: false
+  loop: "{{ lab3_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Configure unattended unlock at boot
+  ansible.builtin.template:
+    src: crypttab.j2
+    dest: /etc/crypttab
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    lab3_crypttab_entries: "{{ lab3_volumes | zip(lab3_luks_uuids.results | map(attribute='stdout') | list) | list }}"
+
+- name: Install the mount guard used by the service units
+  ansible.builtin.copy:
+    src: lab3-require-volume
+    dest: /usr/local/sbin/lab3-require-volume
+    owner: root
+    group: root
+    mode: "0755"
+
+# Mounted from /dev/mapper/<name>, which is stable because the crypttab name is
+# ours. If the volume fails to unlock the device is simply absent, the mount
+# fails, and RequiresMountsFor stops the service.
+- name: Mount each data volume and persist it in fstab
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "/dev/mapper/{{ item.mapper }}"
+    fstype: "{{ lab3_volume_fstype }}"
+    opts: defaults
+    state: mounted
+  loop: "{{ lab3_volumes }}"
+  loop_control:
+    label: "{{ item.path }} <- /dev/mapper/{{ item.mapper }}"

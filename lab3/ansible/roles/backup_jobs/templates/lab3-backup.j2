@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Take a pgBackRest backup, but only on the node holding the leader key.
+#
+# Usage: lab3-backup full|incr
+#
+# Runs from a timer on all three nodes. Two of them exit quietly having done
+# nothing; that is the design, not a failure. What is NOT tolerated is being
+# unable to tell which node this is -- see lab3-leader-gate.
+set -uo pipefail
+
+readonly TYPE="${1:-}"
+readonly STANZA="{{ lab3_cluster_name }}"
+readonly GATE={{ lab3_backup_bin_dir }}/lab3-leader-gate
+
+case "$TYPE" in
+  full|incr|diff) ;;
+  *) echo "usage: $(basename "$0") full|incr|diff" >&2; exit 2 ;;
+esac
+
+"$GATE"
+case $? in
+  0) ;;
+  1) echo "Not the leader; no backup taken on this node."; exit 0 ;;
+  # Exit non-zero so systemd records a failed unit. A backup that did not happen
+  # must not look like a backup that was skipped on purpose.
+  *) echo "Refusing to run: leadership could not be determined." >&2; exit 1 ;;
+esac
+
+echo "Leader confirmed; taking a $TYPE backup of stanza $STANZA."
+exec pgbackrest --stanza="$STANZA" --type="$TYPE" backup

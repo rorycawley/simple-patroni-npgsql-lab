@@ -1,0 +1,7 @@
+---
+- name: Provision the application host
+  hosts: app_nodes
+  become: true
+  gather_facts: false
+  roles:
+    - role: app_client

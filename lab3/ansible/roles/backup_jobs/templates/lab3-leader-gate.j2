@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Is this node the one that should be doing repository work?
+#
+# The backup job runs on all three nodes and must produce ONE backup. So does
+# `pgbackrest check`, and so will the dump job -- all three need the same
+# answer, and they get it here rather than implementing it three times and
+# disagreeing.
+#
+#   exit 0   this node holds the leader key
+#   exit 1   it does not. A normal, quiet outcome on two nodes out of three
+#   exit 2   COULD NOT TELL. Not the same thing as "no"
+#
+# That third case is the whole reason this is a separate script. The obvious
+# implementation returns "not leader" when it cannot reach Patroni, and then a
+# broken endpoint, an expired certificate or a moved port makes every node
+# decline, no backup is taken, and every timer still reports success. Nothing
+# raises an error and the repository quietly stops filling.
+#
+# WHY /patroni AND NOT /leader
+#
+# /leader looks like the obvious choice -- 200 on the leader, 503 elsewhere --
+# and it is a trap. Measured on this cluster: Patroni answers **503 for an
+# unknown path too**, on every node. So a renamed, moved or mistyped endpoint is
+# indistinguishable from "not the leader", and the failure it produces is
+# exactly the silent one above. A status code alone cannot carry this decision.
+#
+# /patroni returns 200 on *every* node with the role in its body, so:
+#
+#   - anything but 200        -> the API did not answer as expected -> unknown
+#   - 200 with a known role   -> a positive statement about THIS node
+#   - 200 with an odd role    -> unknown, deliberately: better to fail loudly
+#                                than to guess about a role we do not recognise
+#
+# /health is no good either: it returns 200 on all three nodes, so a gate
+# pointed there backs up everywhere instead of nowhere.
+set -uo pipefail
+
+readonly URL="https://127.0.0.1:{{ lab3_patroni_rest_port }}/patroni"
+readonly PKI="{{ lab3_pki_dir }}"
+readonly BODY="$(mktemp)"
+trap 'rm -f "$BODY"' EXIT
+
+code="$(curl -s -o "$BODY" -w '%{http_code}' --max-time 5 \
+  --cacert "$PKI/ca.crt" --cert "$PKI/patroni.crt" --key "$PKI/patroni.key" \
+  "$URL" 2>/dev/null || true)"
+
+if [[ "${code:-000}" != "200" ]]; then
+  echo "lab3-leader-gate: $URL answered '${code:-000}', not 200; leadership unknown" >&2
+  exit 2
+fi
+
+role="$(jq -r '.role // empty' < "$BODY" 2>/dev/null)"
+case "$role" in
+  primary|master|standby_leader) exit 0 ;;
+  replica|sync_standby|quorum_standby|standby) exit 1 ;;
+  *)
+    echo "lab3-leader-gate: unrecognised role '${role:-<none>}' from $URL" >&2
+    exit 2
+    ;;
+esac

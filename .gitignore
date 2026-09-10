@@ -35,3 +35,12 @@ coverage/
 # a pattern containing a slash is anchored to this file's directory, so
 # "client/publish/" would not match lab2/client/publish/.
 publish/
+
+# Lab 3 object store. Deliberately outside .secrets/ so `make clean` cannot
+# destroy the backups -- Lab 4 depends on the repository outliving the cluster.
+.minio/
+
+# Lab 3+ recovery inputs: the repository cipher passphrase and anything else
+# that must OUTLIVE the cluster. Not under .secrets/, because `make clean`
+# deletes that and Lab 4 destroys the cluster while the backups survive.
+.recovery-inputs/

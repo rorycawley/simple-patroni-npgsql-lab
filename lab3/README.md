@@ -1,71 +1,77 @@
 # Lab 3: durable backups
 
-> **Status: specified, not built.** Everything below is the design and its
-> acceptance criteria. No results are claimed.
+> **Status: in progress — P0 to P5 of [`PLAN.md`](PLAN.md) complete.**
+> **AC-1 to AC-5 are met**: the repository is off-host and encrypted, only the
+> node holding the leader key writes to it, retention expires dependents
+> correctly, and the logical dumps are separately encrypted and reload.
+> **AC-6 is not built** — archiving across a promotion, and the measurement of
+> the recoverable window — and no result is claimed for it.
 
 The shared components, cluster design and prerequisites are in the
-[top-level README](../README.md). This file covers Lab 3 only.
+[top-level README](../README.md). This file covers Lab 3 only: what it must
+establish and how each criterion is judged. [`PLAN.md`](PLAN.md) covers how it
+gets built — the phases, their order, and the two risks worth watching.
 
 ## Goal
 
-Move the backup repository off the database hosts, encrypt it, reach it over
-TLS, and keep it working while the primary moves — with **two** kinds of backup,
-because they recover different disasters.
+Give this cluster a backup history that **exists**, that lives where losing the
+cluster cannot reach it, and that is complete enough to be worth restoring.
 
-## What each one is for
+The first of those was not rhetorical. **Before this lab there was no backup at
+all.** Labs 1 and 2 install pgBackRest, create the stanza, archive WAL
+continuously, and pass `pgbackrest check` — but nothing ever takes a base backup,
+so the archive has nothing to be replayed onto. Their repository is also local to
+each node, so it cannot survive losing the node it exists to protect against
+losing.
 
-A fuller answer — what each produces, when *not* to use each, and the questions
-that come up — is in
-[`WHY_PGBACKREST_AND_PGDUMP.md`](../WHY_PGBACKREST_AND_PGDUMP.md). In short:
+Both are deliberate: those labs demonstrate that archiving is configured
+correctly, which is a real prerequisite and not a backup. This lab is where a
+configuration that *looks* like backup becomes one.
 
-They are not two backup systems. They do different jobs, and only one of them is
-the disaster recovery mechanism.
+| | Labs 1–2 | This lab | Built? |
+| --- | --- | --- | --- |
+| WAL archiving | Continuous, verified | Unchanged, now off-host | **yes** |
+| Repository location | Local to each node | MinIO, off every database host | **yes** |
+| Repository encryption | None | `aes-256-cbc`, keyed outside the cluster | **yes** |
+| Base backups | **None ever taken** | Scheduled full and incremental, with retention | **yes** |
+| Logical dumps | None | Scheduled, encrypted, under their own prefix | **yes** |
 
-**pgBackRest is the disaster recovery system.** It backs up the whole cluster
-byte for byte and archives WAL continuously, so it can rebuild everything from
-nothing and can wind the cluster back to any moment it holds WAL for. If only one
-of the two existed, it would be this one.
+All of it is built, through P5 of [`PLAN.md`](PLAN.md). The repository is
+off-host and encrypted, holds a real backup history taken by whichever node
+currently holds the leader key, and carries logical dumps under their own prefix
+with their own passphrase — `pgbackrest info` reports `status: ok` where it
+reported `error (no valid backups)` three phases ago.
 
-**`pg_dump` is a scalpel and a canary.** It is not a second disaster recovery
-system — it cannot do point-in-time recovery, and restoring a large database from
-a dump is slow. It earns its place by doing two things pgBackRest cannot:
-recover *one table* without disturbing anything else, and prove the data is
-**readable** rather than merely present.
+**AC-1 to AC-5 are met.** What remains is **AC-6**: that archiving survives a
+promotion without a gap, and the measurement of how far past the last backup
+recovery can reach. That is P6.
 
-Which to reach for:
+## Why there are two
 
-| Situation | Instrument | Where |
+They are not two backup systems, and neither is a spare for the other:
+**pgBackRest copies files, `pg_dump` copies data.** What each recovers, what
+reaching for it costs, and why one of them detects the corruption the other
+preserves all follow from that single distinction. The summary is in
+[the root README](../README.md#backups-two-instruments-not-two-backup-systems);
+the full treatment, including when *not* to use each, is in
+[`WHY_PGBACKREST_AND_PGDUMP.md`](../WHY_PGBACKREST_AND_PGDUMP.md).
+
+What this lab needs from that argument is only which instrument answers which
+disaster, and where each is proven:
+
+| Situation | Instrument | Proven in |
 | --- | --- | --- |
 | Every node lost | pgBackRest — full restore | [Lab 4](../lab4/README.md) |
-| The cluster must be wound back before a bad change | pgBackRest — PITR to a marker | [Lab 6](../lab6/README.md) |
-| One table mangled, everything else fine | `pg_dump` of that table | [Lab 6](../lab6/README.md) |
-| "Is the data actually readable?" | a `pg_dump` that completes | this lab, AC-2 |
-| Moving to a new major version | `pg_dump` | out of scope |
+| The cluster must be wound back before a bad change | pgBackRest — PITR to a marker | [Lab 8](../lab8/README.md) |
+| One table mangled, everything else fine | `pg_dump` of that table | [Lab 8](../lab8/README.md) |
+| "Is the data actually readable?" | a `pg_dump` that completes | this lab, AC-4 |
 
-The middle row is the one that justifies the extra machinery. Recovering a
-dropped table from a physical backup means restoring the whole cluster to a point
-in time and discarding **everything committed since**. A logical dump of that one
-table costs nothing else.
-
-### Why the canary matters
-
-| | pgBackRest — physical | `pg_dump` — logical |
-| --- | --- | --- |
-| Unit of recovery | The whole cluster | A single table, schema or database |
-| Point-in-time recovery | Yes, via WAL replay | No — one instant per dump |
-| Cost of using it | Everything committed after the target is discarded | Nothing else is touched |
-| Portable across major versions | **No** — version-locked | Yes |
-| Speed to take | Fast, scales to large data | Slow, and the restore is slower still |
-| Reads through the SQL layer | No | **Yes** |
-
-That last row is the important one:
-
-> A physical backup will faithfully back up corruption. A logical dump cannot.
-
-pgBackRest copies bytes. A corrupt page is preserved exactly and restored
-exactly. `pg_dump` reads every row through PostgreSQL's own executor, so a dump
-that *completes* is evidence the data can still be read — which is why the dump
-doubles as a verification pass over the same data pgBackRest is copying blind.
+The third row is what justifies the extra machinery. Recovering one dropped table
+from a physical backup means restoring the whole cluster to a point in time and
+discarding **everything committed since**; a logical dump of that table costs
+nothing else. The fourth is why the dump doubles as a verification pass over the
+same data pgBackRest is copying blind — see
+[AC-4](#ac-4-is-doing-more-work-than-it-looks).
 
 ## Where each kind of backup is stored
 
@@ -162,20 +168,43 @@ table bloat. Both are defensible; picking silently is not.
 
 | ID | Property | Pass condition |
 | --- | --- | --- |
-| AC-1 | The repository survives the cluster | Backups live on MinIO, not on any database host; destroying any node leaves the repository complete |
-| AC-2 | Both kinds of backup succeed and are self-consistent | A full and an incremental pgBackRest backup pass `pgbackrest verify`, and a `pg_dump` of `appdb` completes and reloads into a scratch database |
-| AC-3 | **Every** object is encrypted at rest, and the transport is encrypted | Nothing under either prefix is readable straight from the bucket: pgBackRest objects need `repo1-cipher-pass`, dumps need the dump passphrase. A plaintext connection to MinIO is refused |
-| AC-4 | Backups survive a failover | Force a promotion mid-cycle: the new primary continues archiving into the same stanza, `pgbackrest check` passes, and the WAL sequence has no gap |
-| AC-5 | Exactly one backup runs per cycle | With the timer enabled on all three nodes, one backup is taken; the two non-leaders exit without touching the repository |
+| AC-1 | A backup history exists, and only the leader creates it | On schedule, a full and subsequent incrementals are taken and appear in `pgbackrest info` **output** — not merely a zero exit status, which `info` returns even for a repository it cannot read. With the timer enabled on all three nodes, exactly one backup is produced per cycle, and after a promotion it is the **new** leader that produces it |
+| AC-2 | The repository outlives any node | Every backup and WAL segment is on MinIO, off all three database hosts. Destroying any node leaves the repository complete |
+| AC-3 | The chain is real, and retention respects it | `pgbackrest verify` passes across the whole repository. Expiring a full under `repo1-retention-full` expires the differentials and incrementals that depend on it, and leaves nothing referenced by `backup.info` that is no longer present |
+| AC-4 | A dump proves the data is *readable*, not merely present | A `pg_dump` of `appdb` completes and reloads into a scratch database |
+| AC-5 | **Every** object is encrypted at rest, and every transfer in transit | Nothing under either prefix is readable straight from the bucket: pgBackRest objects need `repo1-cipher-pass`, dumps need the dump passphrase. A plaintext connection to MinIO is refused |
+| AC-6 | Archiving survives a promotion, and the recoverable window is measured | Force a promotion mid-cycle: the new primary continues archiving into the same stanza, the WAL sequence has no gap, and `pgbackrest check` passes. Report how far past the last backup the archive reaches |
 
-### AC-3 covers both prefixes on purpose
+### AC-1 is the criterion this lab exists for
 
-The obvious version of this criterion checks the pgBackRest objects and stops
-there, which would leave the dumps in plaintext beside them and still pass. Every
-object in the bucket has to fail to open without its passphrase, or the criterion
-tests the easier half of the data.
+**`pgbackrest check` passing is not evidence that a backup exists.** It validates
+the configuration and confirms archiving works, and it passes perfectly well
+against a repository containing no backup at all — which is precisely the state
+Labs 1 and 2 are in. A criterion that accepted `check` would certify the current,
+unrecoverable arrangement as a success.
 
-### AC-2 is doing more work than it looks
+Nor is a zero exit status evidence of anything. Measured while planning this lab:
+`pgbackrest info` against a repository it could not decrypt printed
+`status: error (other)` with a `CryptoError` — and **exited 0**. Every criterion
+here reads parsed output for that reason.
+
+So AC-1 asserts the *artefact* rather than the configuration. Its second half
+matters as much: a timer on three nodes must not produce three backups, and must
+not produce zero once the leader moves. Both failures are silent.
+
+### AC-3 is where retention is most dangerous
+
+An incremental is worthless without every backup back to its full, so retention
+that counts fulls is also, implicitly, retention over everything depending on
+them. That cascade is correct behaviour and looks like data loss when it is not
+expected — and a repository that expires a full while leaving its dependents
+behind is worse still, because `pgbackrest info` will list backups that cannot be
+restored.
+
+Asserting the cascade is what distinguishes a repository that is pruning itself
+from one that is quietly corrupting its own history.
+
+### AC-4 is doing more work than it looks
 
 Reloading the dump into a scratch database is not a restore rehearsal — that is
 Lab 4. It is the cheapest available proof that the dump is **readable**, which is
@@ -183,12 +212,41 @@ the property `pgbackrest verify` cannot give, because verifying checksums
 confirms the bytes are intact and says nothing about whether PostgreSQL can parse
 what they contain.
 
-### AC-4 is the one a single-node guide would miss
+### AC-5 covers both prefixes on purpose
+
+The obvious version of this criterion checks the pgBackRest objects and stops
+there, which would leave the dumps in plaintext beside them and still pass. Every
+object in the bucket has to fail to open without its passphrase, or the criterion
+tests the easier half of the data.
+
+### AC-6 is the one a single-node guide would miss
 
 Archiving is a property of the primary, and the primary moves. A backup regime
 that works until the first failover and then silently stops is the exact shape of
-failure [Lab 7](../lab7/README.md) exists to detect — and the reason its headline
+failure [Lab 5](../lab5/README.md) exists to detect — and the reason its headline
 metric is the age of the last successful backup rather than any error count.
+
+Its second half is what makes this lab measurable rather than merely green.
+"How far past the last backup can recovery reach" is the number that turns a
+backup schedule into an RPO, and it is bounded by `archive_timeout`, not by how
+often a backup runs.
+
+## What this contributes back
+
+[`SLA.md`](../SLA.md) records the row for corruption, deletion and a bad
+migration as *"bounded by backup age and WAL archive interval"*, with the RTO
+**not established** and sourced to "Labs 3, 4, 8 — not built". This lab supplies
+the first half of that row.
+
+With a backup history that exists and an archive that keeps up with the primary,
+the recoverable window stops being bounded by *backup age* and becomes bounded by
+`archive_timeout` — which is the distinction drawn in
+[`WHY_PGBACKREST_AND_PGDUMP.md`](../WHY_PGBACKREST_AND_PGDUMP.md#wal-archiving-is-the-part-that-actually-bounds-data-loss).
+AC-6 is what measures it instead of asserting it.
+
+The RTO half stays blank until [Lab 4](../lab4/README.md) measures a restore.
+Taking a backup bounds what you could lose; only restoring one bounds how long
+you are down.
 
 ## What this lab does not claim
 
@@ -197,3 +255,8 @@ That any of it can be restored. A repository that accepts writes, passes
 backup works. Whether the result can rebuild a working cluster is
 [Lab 4](../lab4/README.md), and keeping them apart is what stops the first result
 being read as the second.
+
+The same caution applies within this lab. AC-3 asserts the repository is
+internally consistent, and AC-4 asserts one dump is readable. Neither is a
+restore, and `pgbackrest verify` succeeding on every backup still leaves the
+question Lab 4 exists to answer.

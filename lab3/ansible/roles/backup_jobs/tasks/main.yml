@@ -1,0 +1,68 @@
+---
+# The backup job runs on every node and is expected to do nothing on two of
+# them. Installing it everywhere is deliberate: archive_command already follows
+# the primary, and a backup regime that has to be moved by hand after a failover
+# is one that silently stops at the first promotion.
+
+- name: Create the backup script directory
+  ansible.builtin.file:
+    path: "{{ lab3_backup_bin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the leader gate and the backup jobs
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ lab3_backup_bin_dir }}/{{ item }}"
+    owner: root
+    group: root
+    # Root-owned and world-executable, not writable by postgres: the job runs as
+    # postgres, and a script its own runtime user can rewrite is not a control.
+    mode: "0755"
+  loop:
+    - lab3-leader-gate
+    - lab3-backup
+    - lab3-dump
+    - lab3-s3
+
+# Read by the dump job, which runs as postgres. A separate passphrase from
+# repo1-cipher-pass because it protects data pgBackRest does not write.
+- name: Install the dump encryption passphrase
+  ansible.builtin.copy:
+    content: "{{ dump_cipher_pass }}"
+    dest: "{{ lab3_dump_pass_file }}"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+
+- name: Install the backup service and timers
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - lab3-backup@.service
+    - lab3-backup-full.timer
+    - lab3-backup-incr.timer
+    - lab3-dump.service
+    - lab3-dump.timer
+  register: lab3_backup_units
+
+- name: Reload systemd when the units changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: lab3_backup_units.changed
+
+- name: Enable and start the backup timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - lab3-backup-full.timer
+    - lab3-backup-incr.timer
+    - lab3-dump.timer

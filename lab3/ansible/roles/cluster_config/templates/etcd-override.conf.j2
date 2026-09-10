@@ -1,0 +1,24 @@
+[Unit]
+# Refuse to start without the data volume; see percona-patroni.service.
+RequiresMountsFor={{ lab3_etcd_data_dir }}
+
+# The packaged unit sets Restart=on-failure and leaves RestartSec at systemd's
+# 100ms default, with StartLimitBurst=5. That spends the entire retry budget in
+# half a second -- far less than three VMs need to reach a peer handshake, so
+# the node that starts first can exhaust its restarts before the other two
+# exist and then stay dead.
+#
+# Percona's etcd guidance treats a failed first start as expected ("the start
+# may fail by a quorum timeout ... try starting all nodes again at the same
+# time"), so the retry needs a realistic interval. Bounded rather than
+# unlimited: twelve attempts at five seconds still gives up eventually, so a
+# genuinely broken node surfaces as a failed unit instead of restarting for
+# ever.
+StartLimitIntervalSec=120
+StartLimitBurst=12
+
+[Service]
+ExecStartPre=/usr/local/sbin/lab3-require-volume /var/lib/etcd /dev/mapper/lab3-etcd
+ExecStart=
+ExecStart=/usr/bin/etcd --config-file=/etc/etcd/etcd.conf.yaml
+RestartSec=5

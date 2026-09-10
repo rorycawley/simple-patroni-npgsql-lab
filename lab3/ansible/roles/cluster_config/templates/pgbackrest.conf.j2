@@ -1,0 +1,46 @@
+[global]
+# The repository is an object store on the control machine, not a directory on
+# this node. That is the whole point of Lab 3: a backup that lives on the host
+# it is protecting is not a backup, and Labs 1 and 2 said so rather than
+# pretending otherwise.
+repo1-type=s3
+repo1-path={{ lab3_repo_path }}
+repo1-s3-bucket={{ lab3_repo_bucket }}
+repo1-s3-endpoint={{ lab3_repo_endpoint }}
+repo1-storage-port={{ lab3_repo_port }}
+repo1-s3-region={{ lab3_repo_region }}
+
+# Path style is required, not preferred. Measured against this MinIO: host style
+# resolves the bucket as a DNS name and fails with
+# "unable to get address for '{{ lab3_repo_bucket }}.{{ lab3_repo_endpoint }}'".
+repo1-s3-uri-style={{ lab3_repo_uri_style }}
+
+repo1-s3-key={{ minio_backup_access_key }}
+repo1-s3-key-secret={{ minio_backup_secret_key }}
+
+# The object store presents a certificate from the same private CA as the
+# cluster, so pgBackRest is pointed at the CA this node already trusts. Without
+# this line pgBackRest does not silently downgrade -- measured: it refuses with
+# "unable to verify certificate presented by ...". Fails closed, as it should.
+repo1-storage-ca-file={{ lab3_pki_dir }}/ca.crt
+
+# Encryption of the repository itself, independent of the transport. TLS
+# protects it in flight; this protects it at rest, including from whoever
+# administers the object store.
+#
+# This CANNOT be added later. The cipher is fixed when the stanza is created:
+# measured, `stanza-upgrade` against a plaintext stanza fails with
+# "CryptoError: cipher header invalid" and exit 95. A repository created without
+# it must be destroyed and rebuilt, so it is set before the first stanza-create
+# and never afterwards.
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass={{ repo_cipher_pass }}
+
+repo1-retention-full=2
+process-max=2
+start-fast=y
+log-level-console=info
+log-level-file=detail
+
+[{{ lab3_cluster_name }}]
+pg1-path={{ lab3_postgres_data_dir }}
