@@ -287,24 +287,24 @@ From an empty machine:
 ==============================================================================
  Lab 1 results
 ==============================================================================
- PASS  Create the three Lima VMs                                         4m02s
- PASS  Install and configure the Patroni cluster                         5m18s
+ PASS  Create the three Lima VMs                                         3m13s
+ PASS  Install and configure the Patroni cluster                         5m42s
  PASS  Cluster services, quorum, replication, pgBackRest                    6s
  PASS  Criterion 1: client connects to the primary and queries it           1s
- PASS  Client guarantees: pool limit, timeouts, no blind retry             18s
- PASS  Quorum commit: configured, blocking, strict, and lossless         3m16s
- PASS  Criterion 2: failover after the primary VM is lost                  55s
- PASS  Criterion 2: failover after PostgreSQL is killed                     8s
- PASS  Split brain: softdog fences a frozen Patroni                        34s
- PASS  Split brain: Patroni demotes itself without etcd                    57s
+ PASS  Client guarantees: pool limit, timeouts, no blind retry             19s
+ PASS  Quorum commit: configured, blocking, strict, and lossless         2m50s
+ PASS  Criterion 2: failover after the primary VM is lost                  52s
+ PASS  Criterion 2: failover after PostgreSQL is killed                    14s
+ PASS  Split brain: softdog fences a frozen Patroni                        39s
+ PASS  Split brain: Patroni demotes itself without etcd                    41s
 ------------------------------------------------------------------------------
- 10 passed, 0 failed, total 15m35s
+ 10 passed, 0 failed, total 14m37s
 ==============================================================================
 ```
 
 That is a first run with nothing cached: it downloads the Rocky image and
 installs PostgreSQL, Patroni, etcd and pgBackRest on all three nodes. Rerunning
-`make all` against existing VMs takes about six minutes, because VM creation and
+`make all` against existing VMs takes about five minutes, because VM creation and
 package installation both become no-ops — the two setup phases drop to seconds,
 while the checks take the same time either way.
 
