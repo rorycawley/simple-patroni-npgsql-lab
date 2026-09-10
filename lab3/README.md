@@ -12,10 +12,38 @@ Move the backup repository off the database hosts, encrypt it, reach it over
 TLS, and keep it working while the primary moves — with **two** kinds of backup,
 because they recover different disasters.
 
-## Why both pgBackRest and pg_dump
+## What each one is for
 
-Not redundancy. They fail differently and they recover differently, and holding
-only one leaves a real gap.
+They are not two backup systems. They do different jobs, and only one of them is
+the disaster recovery mechanism.
+
+**pgBackRest is the disaster recovery system.** It backs up the whole cluster
+byte for byte and archives WAL continuously, so it can rebuild everything from
+nothing and can wind the cluster back to any moment it holds WAL for. If only one
+of the two existed, it would be this one.
+
+**`pg_dump` is a scalpel and a canary.** It is not a second disaster recovery
+system — it cannot do point-in-time recovery, and restoring a large database from
+a dump is slow. It earns its place by doing two things pgBackRest cannot:
+recover *one table* without disturbing anything else, and prove the data is
+**readable** rather than merely present.
+
+Which to reach for:
+
+| Situation | Instrument | Where |
+| --- | --- | --- |
+| Every node lost | pgBackRest — full restore | [Lab 4](../lab4/README.md) |
+| The cluster must be wound back before a bad change | pgBackRest — PITR to a marker | [Lab 6](../lab6/README.md) |
+| One table mangled, everything else fine | `pg_dump` of that table | [Lab 6](../lab6/README.md) |
+| "Is the data actually readable?" | a `pg_dump` that completes | this lab, AC-2 |
+| Moving to a new major version | `pg_dump` | out of scope |
+
+The middle row is the one that justifies the extra machinery. Recovering a
+dropped table from a physical backup means restoring the whole cluster to a point
+in time and discarding **everything committed since**. A logical dump of that one
+table costs nothing else.
+
+### Why the canary matters
 
 | | pgBackRest — physical | `pg_dump` — logical |
 | --- | --- | --- |
@@ -26,31 +54,51 @@ only one leaves a real gap.
 | Speed to take | Fast, scales to large data | Slow, and the restore is slower still |
 | Reads through the SQL layer | No | **Yes** |
 
-That last row is the one that matters most, and it is the argument for keeping
-both:
+That last row is the important one:
 
 > A physical backup will faithfully back up corruption. A logical dump cannot.
 
-pgBackRest copies bytes. If a page is corrupt, the corruption is preserved and
-restored exactly. `pg_dump` reads every row through PostgreSQL's own executor, so
-a dump that *completes* is evidence the data is readable, not merely that bytes
-were copied. One is a backup; the other doubles as a verification pass.
+pgBackRest copies bytes. A corrupt page is preserved exactly and restored
+exactly. `pg_dump` reads every row through PostgreSQL's own executor, so a dump
+that *completes* is evidence the data can still be read — which is why the dump
+doubles as a verification pass over the same data pgBackRest is copying blind.
 
-The second argument is blast radius. Recovering a dropped table from a physical
-backup means restoring the whole cluster to a point in time and discarding
-everything committed since — the cost [Lab 6](../lab6/README.md) has to measure. A
-logical dump restores that one table and touches nothing else.
+## Where each kind of backup is stored
 
-The third is escape. A physical backup is useless for moving to a new major
-version or a different platform. `pg_dump` is the migration path when the answer
-is "get the data out of here".
+One MinIO bucket, two prefixes, because they are managed by different things:
+
+```text
+s3://lab3-backups/pgbackrest/   pgBackRest owns this entirely
+s3://lab3-backups/dumps/        written and expired by the lab's own job
+```
+
+A pgBackRest repository is a structured store it manages itself — backup sets,
+the WAL archive, manifests, `backup.info` — and it is not a place to drop
+arbitrary files. Dumps therefore need their own prefix, outside `repo1-path`, so
+pgBackRest's retention and `expire` can never see or reap them.
+
+One bucket rather than two keeps it to a single endpoint, credential and CA,
+which is less to configure and less to get wrong.
+
+### The dumps must be encrypted separately
+
+This is the part that is easy to miss. pgBackRest encrypts its own repository
+with `repo1-cipher-pass`, and that protection **does not extend to anything
+written outside it**. A dump uploaded as it comes out of `pg_dump` would sit in
+the same bucket in plaintext, readable by whoever administers the object store —
+defeating the property AC-3 exists to establish, for half the data.
+
+Dumps are therefore encrypted client-side before upload, with their own
+passphrase from the same secret store as `repo1-cipher-pass`. TLS protects them
+in flight; that passphrase protects them at rest, on the same terms as the
+physical backups.
 
 ## Scope
 
 | In scope | Out of scope |
 | --- | --- |
 | A pgBackRest repository on MinIO, off the database hosts | Restoring from it — that is [Lab 4](../lab4/README.md) |
-| `pg_dump` of `appdb`, scheduled and stored in the same repository | Cross-region or offsite replication of the repository |
+| `pg_dump` of `appdb`, scheduled, encrypted, and stored under its own prefix | Cross-region or offsite replication of the repository |
 | Repository encryption (`repo1-cipher-type=aes-256-cbc`) and TLS to MinIO | A second, independent repository — see the limitation below |
 | Backups and WAL archiving that survive a failover | Backup of etcd — see below |
 | Full and incremental backups, with retention | Tuning for databases large enough to need parallel restore |
@@ -112,9 +160,16 @@ table bloat. Both are defensible; picking silently is not.
 | --- | --- | --- |
 | AC-1 | The repository survives the cluster | Backups live on MinIO, not on any database host; destroying any node leaves the repository complete |
 | AC-2 | Both kinds of backup succeed and are self-consistent | A full and an incremental pgBackRest backup pass `pgbackrest verify`, and a `pg_dump` of `appdb` completes and reloads into a scratch database |
-| AC-3 | The repository is encrypted at rest and in transit | Objects in MinIO are unreadable without `repo1-cipher-pass`; a plaintext connection to MinIO is refused |
+| AC-3 | **Every** object is encrypted at rest, and the transport is encrypted | Nothing under either prefix is readable straight from the bucket: pgBackRest objects need `repo1-cipher-pass`, dumps need the dump passphrase. A plaintext connection to MinIO is refused |
 | AC-4 | Backups survive a failover | Force a promotion mid-cycle: the new primary continues archiving into the same stanza, `pgbackrest check` passes, and the WAL sequence has no gap |
 | AC-5 | Exactly one backup runs per cycle | With the timer enabled on all three nodes, one backup is taken; the two non-leaders exit without touching the repository |
+
+### AC-3 covers both prefixes on purpose
+
+The obvious version of this criterion checks the pgBackRest objects and stops
+there, which would leave the dumps in plaintext beside them and still pass. Every
+object in the bucket has to fail to open without its passphrase, or the criterion
+tests the easier half of the data.
 
 ### AC-2 is doing more work than it looks
 

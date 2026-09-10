@@ -236,6 +236,7 @@ GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text)  TO pgbackres
 | LUKS volume keys | Lab 2 | See the boot-dependency warning below |
 | MinIO access key and secret | Lab 3 | Repository access |
 | **pgBackRest `repo1-cipher-pass`** | Lab 3 | See below |
+| Dump encryption passphrase | Lab 3 | `pg_dump` output is written outside the pgBackRest repository, so `repo1-cipher-pass` does not cover it. Without its own passphrase the dumps sit in the bucket in plaintext |
 | Grafana admin, Alloy → Loki/Mimir credentials | Lab 7 | |
 
 ## Three risks worth stating

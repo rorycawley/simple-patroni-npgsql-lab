@@ -76,12 +76,15 @@ destroyed without the other.
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
 network. Lab 2 removes that constraint.
 
-[Lab 3](lab3/README.md) takes two kinds of backup, because they recover
-different disasters. pgBackRest copies bytes and restores the whole cluster to a
-point in time; `pg_dump` reads every row through PostgreSQL's own executor and
-restores a single table. The sharpest difference is that **a physical backup
-faithfully backs up corruption and a logical dump cannot** — a dump that
-completes is evidence the data is readable, not merely that bytes were copied.
+[Lab 3](lab3/README.md) takes two kinds of backup, and they do different jobs
+rather than duplicating each other. **pgBackRest is the disaster recovery
+system**: it copies the cluster byte for byte and archives WAL, so it can rebuild
+everything from nothing or wind the cluster back to a moment. **`pg_dump` is a
+scalpel and a canary** — it recovers a single table without disturbing anything
+else, and because it reads every row through PostgreSQL's own executor, a dump
+that completes is evidence the data is *readable* rather than merely present.
+That second job matters because **a physical backup faithfully backs up
+corruption and a logical dump cannot**.
 
 Backup and recovery are then deliberately two labs rather than one. Lab 3 can
 finish green while proving nothing about recovery: a repository that accepts writes,
