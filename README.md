@@ -18,7 +18,7 @@ Each file below owns one subject and does not repeat another's.
 | [`lab2/README.md`](lab2/README.md) | Lab 2 alone: what it adds over Lab 1, its acceptance criteria, and how to run it |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md) | How that lab's automation installs and configures the nodes, and its network policy |
 | [`lab2/PLAN.md`](lab2/PLAN.md) | How Lab 2 was built, the risks it had to mitigate, and what was deferred |
-| [`lab3/README.md`](lab3/README.md), [`lab6/README.md`](lab6/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
+| [`lab3/README.md`](lab3/README.md), [`lab6/README.md`](lab6/README.md), [`lab7/README.md`](lab7/README.md), [`lab8/README.md`](lab8/README.md) | Those labs' designs and acceptance criteria — specified ahead of being built |
 | [`SLA.md`](SLA.md) | What the labs establish about RPO, RTO and availability, per failure mode |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, its privileges, and which lab introduces it |
 
@@ -32,7 +32,7 @@ Each file below owns one subject and does not repeat another's.
 | 4 — not started | Recovery: restoring from a Lab 3 backup, including to a point in time, and proving the restored cluster holds the right data | — | — | — |
 | 5 — not started | Schema migration with Flyway: applying versioned migrations against the cluster, and surviving a failover mid-migration | — | — | — |
 | [6](lab6/README.md) — specified, not built | Shipping a schema change to a live cluster without downtime, with a simulated CI/CD pipeline | — | — | — |
-| 7 — not started | Recovering from a bad migration: back up before migrating, then restore to the moment before it ran | — | — | — |
+| [7](lab7/README.md) — specified, not built | Recovering from a bad migration: mark before migrating, then recover by table or rewind the cluster | — | — | — |
 | [8](lab8/README.md) — specified, not built | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | — | — | — |
 
 Lab 1 is deliberately unencrypted, so run it only on an isolated, trusted lab
@@ -78,7 +78,7 @@ itself is simulated by a script.
 Labs 5 and 6 divide cleanly: 5 is the infrastructure interrupting your migration,
 6 is your migration interrupting your users.
 
-Lab 7 is the capstone, and the case every earlier lab is blind to. A bad
+[Lab 7](lab7/README.md) is the capstone, and the case every earlier lab is blind to. A bad
 migration is not a fault: nothing crashes, no node is lost, and the cluster stays
 perfectly healthy while doing the wrong thing. Worse, the machinery from Labs 1
 and 2 works *against* recovery — quorum commit makes the bad migration durable
@@ -91,7 +91,14 @@ them.
 
 It also has a cost worth stating rather than discovering: rewinding to just
 before the migration discards every transaction committed after it. Lab 7 has to
-measure that window, not just prove the schema came back.
+measure that window, not just prove the schema came back — which is why it holds
+two instruments rather than one. A targeted logical dump restores the tables the
+migration mangled and loses nothing else; full point-in-time recovery is the
+emergency brake, reached for only when the scalpel will not do.
+
+The protection is narrower than it first sounds. Transactional DDL means a
+migration that *crashes* rolls back by itself, so what needs recovering is one
+that succeeded and was wrong.
 
 [Lab 8](lab8/README.md) is monitoring, and it is the easiest lab here to fake —
 a green dashboard proves a dashboard renders, and a broken alerting pipeline
