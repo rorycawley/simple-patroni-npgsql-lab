@@ -45,7 +45,11 @@ blocks writes rather than accepting one it cannot make durable.
 
 ## Where things are documented
 
-Each file below owns one subject and does not repeat another's.
+Each file below owns one subject and does not repeat another's — with one
+deliberate exception. The two `ansible/README.md` files overlap substantially,
+because Lab 2 is a standalone copy of Lab 1 rather than a layer on it, and making
+one link to the other would break the property that either lab can be built and
+destroyed without the other.
 
 | File | Owns |
 | --- | --- |
