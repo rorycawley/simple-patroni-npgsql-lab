@@ -105,6 +105,37 @@
     group: root
     mode: "0644"
 
+# SELinux must be Enforcing before the services start, and the image does not
+# guarantee it. The Rocky cloud image reaches Enforcing only after its first-boot
+# relabel and the reboot that follows, so whether a build finds it Enforcing
+# depends on timing rather than configuration -- which is exactly how it passed
+# seven consecutive builds and then failed on two nodes of the eighth.
+#
+# Relabel first, then enforce. Setting Enforcing over unlabelled files would
+# deny the services their own data directories, and on Lab 2 those directories
+# are freshly created filesystems on the LUKS volumes, which carry no labels at
+# all until restorecon runs.
+- name: Restore SELinux contexts on the paths this lab creates
+  ansible.builtin.command: restorecon -R -F /var/lib/pgsql /var/lib/etcd /etc/patroni /etc/lab2
+  changed_when: false
+  failed_when: false
+
+- name: Read the current SELinux mode
+  ansible.builtin.command: getenforce
+  register: lab2_selinux_now
+  changed_when: false
+
+- name: Put SELinux into Enforcing mode
+  ansible.builtin.command: setenforce 1
+  when: (lab2_selinux_now.stdout | trim) == 'Permissive'
+  changed_when: true
+
+- name: Assert SELinux is Enforcing before the services start
+  ansible.builtin.command: getenforce
+  register: lab2_selinux_after
+  changed_when: false
+  failed_when: (lab2_selinux_after.stdout | trim) != 'Enforcing'
+
 - name: Reload systemd units
   ansible.builtin.systemd:
     daemon_reload: true

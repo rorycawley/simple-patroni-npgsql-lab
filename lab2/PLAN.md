@@ -376,6 +376,30 @@ bootstrap — which is the right amount of evidence for the question it answers:
 whether the rewritten playbook works against Lab 1's own variables, paths and
 topology. Measuring a rate was Lab 2's job and is already done.
 
+### SELinux Enforcing was a coincidence, not a setting
+
+`verify.yml` had asserted SELinux was Enforcing since P4, and it passed seven
+consecutive builds. On the eighth it failed on two nodes of three, reporting
+Permissive.
+
+The uptimes explained it. All three read Enforcing when inspected afterwards, but
+the two that had failed were up one and two minutes while the third was up
+eighteen -- the fencing checks had rebooted them *after* verify ran. The Rocky
+cloud image reaches Enforcing only after its first-boot relabel and the reboot
+that follows, so whether a build finds it Enforcing depends on timing. Nothing in
+either lab ever *set* it.
+
+`cluster_config` now runs `restorecon` over the paths the lab creates and then
+`setenforce 1`, before any service starts. Order matters: enforcing over
+unlabelled files would deny the services their own data directories, and here
+those are freshly created filesystems on the LUKS volumes, which carry no labels
+until `restorecon` runs. The rebuild showed the task doing real work -- `changed`
+on two nodes, `skipped` on the one already Enforcing, the same two-of-three split
+as the failure.
+
+Lab 1 asserted nothing about SELinux at all, so it could have been running
+Permissive throughout with nothing to say so. It now sets and asserts it too.
+
 Two further bugs were found only by building from empty rather than iterating on a
 running cluster: `/etc/lab2` was created `0700` as a side effect of the LUKS key
 directory, so every service was denied its certificates with a "permission

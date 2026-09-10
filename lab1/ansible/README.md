@@ -21,6 +21,10 @@ It follows Percona's RPM and HA guidance:
   transaction cannot be lost in a failover. Strict mode means the guarantee has
   no exception: with no standby able to confirm, a commit blocks rather than
   completing on one node;
+- puts SELinux into Enforcing mode explicitly, after restoring contexts on the
+  paths it creates, rather than trusting the image default — which only becomes
+  Enforcing after the first-boot relabel and reboot, and so is a race rather than
+  a setting. `verify.yml` asserts it;
 - configures and verifies `softdog` watchdog fencing;
 - creates a least-privilege `app_runtime` login, `appdb`, and the write-probe
   table;

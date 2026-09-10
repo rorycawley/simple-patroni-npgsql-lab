@@ -19,12 +19,27 @@ check_timeline: true
 # DCS /sync key so only a node known to be caught up can be promoted.
 #
 # node_count 1 of 2 available standbys is the deliberate trade: one standby may
-# fail without blocking writes. This is NOT synchronous_mode_strict, so if every
-# standby is lost Patroni falls back to asynchronous rather than refusing writes
-# -- availability over durability at the point where the cluster has no replica
-# left to be durable against.
+# fail without blocking writes.
+#
+# synchronous_mode_strict makes the durability guarantee unconditional. Without
+# it, Patroni CLEARS synchronous_standby_names when no standby can confirm and
+# the primary carries on asynchronously -- silently, with the client never told
+# that its durability guarantee has weakened. Strict mode refuses to clear it, so
+# a commit blocks in SyncRep rather than completing on a single node.
+#
+# The accepted cost is a real outage: with every standby unavailable, writes stop
+# until one returns. Two conditions follow and are not optional -- clients need a
+# command timeout, because a blocked commit hangs rather than failing fast (the
+# lab client sets Command Timeout=10), and rolling maintenance must never take
+# both standbys out at once. One can always be lost freely; the second stops
+# writes.
+#
+# Losing two of three nodes entirely is read-only either way, because etcd
+# quorum goes with them. The setting only changes the narrower case where the
+# standby databases are down while their nodes are up.
 synchronous_mode: quorum
 synchronous_node_count: 1
+synchronous_mode_strict: true
 postgresql:
   use_pg_rewind: true
   use_slots: true

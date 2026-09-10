@@ -14,8 +14,7 @@ Two outcomes, stated precisely, because both are easy to overclaim.
 **1. No acknowledged transaction is lost to infrastructure failure.** Quorum
 commit means a commit is not acknowledged until a second node holds it, so no
 node failure, promotion or fence can lose one; `synchronous_mode_strict` removes
-the one case where that guarantee used to lapse ([enabled in Lab 1, not yet in
-Lab 2](#durability)). Page checksums catch corruption before it is replicated and copied into every backup.
+the one case where that guarantee used to lapse, in [both built labs](#durability). Page checksums catch corruption before it is replicated and copied into every backup.
 Backups and a rehearsed restore cover losing every node at once.
 
 Two things sit outside that claim, deliberately:
@@ -222,10 +221,14 @@ timeout, because a blocked commit hangs rather than failing fast, and rolling
 maintenance must never take both standbys out at once. The reasoning is in
 [`SLA.md`](SLA.md#the-exception-being-closed).
 
-> **Status: implemented and verified in Lab 1** — `make test_sync` includes a
-> mutation test that runs the same fault with the setting on and off and
-> requires opposite outcomes. **Lab 2 still to follow**; until then it falls
-> back to asynchronous when the last standby is gone.
+> **Status: implemented and verified in both labs.** `make test_sync` includes a
+> mutation test that runs the same fault with the setting on and off and requires
+> opposite outcomes:
+>
+> ```text
+> strict ON    synchronous_standby_names 'ANY 1 (*)'   SyncRep   commit blocked
+> strict OFF   synchronous_standby_names ''            none      commit completed
+> ```
 
 ## Prerequisites
 

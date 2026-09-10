@@ -90,8 +90,16 @@ negative: it fails the run if a guest is holding the CA private key.
   `pg_hba` in which every non-local rule is `hostssl`, so plaintext is refused
   rather than merely unused.
 
-SELinux is left Enforcing, which is the image default. `verify.yml` asserts it
-explicitly, because a default that nothing checks is a default that can drift.
+SELinux is put into Enforcing mode explicitly, and `verify.yml` asserts it.
+Relying on the image default turned out to be a race: the Rocky cloud image
+reaches Enforcing only after its first-boot relabel and the reboot that follows,
+so a build finds it Permissive or not depending on timing — which is how it
+passed seven consecutive builds and then failed on two nodes of the eighth.
+`cluster_config` therefore runs `restorecon` over the paths this lab creates and
+then `setenforce 1`, before any service starts. The order matters: enforcing over
+unlabelled files would deny the services their own data directories, and here
+those directories are freshly created filesystems on the LUKS volumes, which
+carry no labels at all until `restorecon` runs.
 
 ## Cluster configuration
 
@@ -105,9 +113,10 @@ Otherwise this follows Percona's RPM and HA guidance, as Lab 1 does:
 - forms a static three-member etcd cluster, starts Patroni on each node, and
   verifies one leader plus two streaming replicas;
 - configures quorum commit (`synchronous_mode: quorum`, `synchronous_node_count: 1`,
-  and an explicit `synchronous_commit: on`, without which the quorum expression
-  would be inert). `synchronous_mode_strict` is **not yet set here** — the
-  decision to enable it lands in Lab 1 first and is carried over afterwards;
+  `synchronous_mode_strict: true`, and an explicit `synchronous_commit: on`,
+  without which the quorum expression would be inert). Strict mode means the
+  guarantee has no exception: with no standby able to confirm, a commit blocks
+  rather than completing on one node;
 - configures and verifies `softdog` watchdog fencing;
 - creates a least-privilege `app_runtime` login, `appdb`, and the write-probe
   table;

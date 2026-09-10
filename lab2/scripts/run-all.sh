@@ -127,7 +127,7 @@ main() {
   run_phase "Identity: verification fails closed on a wrong CA" test_identity optional
   run_phase "Criterion 1: client connects to the primary and queries it" test_connection optional
   run_phase "Client guarantees: pool limit, timeouts, no blind retry" test_client optional
-  run_phase "Quorum commit: configured, blocking, and lossless" test_sync optional
+  run_phase "Quorum commit: configured, blocking, strict, and lossless" test_sync optional
   run_phase "Criterion 2: failover after the primary VM is lost" test_failover_vm optional
   run_phase "Criterion 2: failover after PostgreSQL is killed" test_failover_postgres optional
   run_phase "Split brain: softdog fences a frozen Patroni" test_fencing_patroni optional

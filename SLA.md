@@ -13,9 +13,8 @@
 >
 > Rationale and consequences: [The exception being closed](#the-exception-being-closed).
 >
-> **Status: implemented and verified in Lab 1; Lab 2 still to follow.** Lab 1
-> proves it with a mutation test — the same fault, the same cluster, only the
-> setting changed:
+> **Status: implemented and verified in both built labs.** Each proves it with a
+> mutation test — the same fault, the same cluster, only the setting changed:
 >
 > ```text
 > strict ON    synchronous_standby_names 'ANY 1 (*)'   SyncRep   commit blocked
@@ -23,8 +22,7 @@
 > ```
 >
 > `ANY 1 (*)` is Patroni's unsatisfiable placeholder — the concrete artefact of
-> it refusing to degrade. Until Lab 2 follows, its rows below still describe the
-> non-strict behaviour.
+> it refusing to degrade.
 
 What the labs establish about data loss and downtime, per failure mode.
 
@@ -128,8 +126,7 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | PostgreSQL killed, Patroni alive | **0** | ~10–25s | ≤ 120 events/yr | measured |
 | Patroni frozen, PostgreSQL serving | **0** | ~25–60s | ≤ 50 events/yr | measured |
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
-| Every standby lost at once — *Lab 1, strict* | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
-| Every standby lost at once — *Lab 2, not yet strict* | **> 0, unbounded** | none; writes continue | non-strict behaviour, still to be replaced | configured |
+| Every standby lost at once | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
 | Corruption, deletion, bad migration | bounded by backup age and WAL archive interval | hours — restore plus replay | **not established** | Labs 3, 4, 6 — not built |
 
 **The last row is outside what HA can address.** Failover, fencing and quorum

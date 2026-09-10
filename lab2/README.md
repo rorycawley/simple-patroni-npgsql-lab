@@ -36,10 +36,9 @@ Everything Lab 1 asserts about failover, fencing, quorum commit and the client's
 configured limits is re-run here and documented in the
 [Lab 1 guide](../lab1/README.md) rather than repeated.
 
-One difference, until it is ported: Lab 1 now sets `synchronous_mode_strict`, so
-it blocks writes rather than degrading to asynchronous when no standby can
-confirm. **Lab 2 does not yet**, and so still has the exception described in
-[`SLA.md`](../SLA.md#the-exception-being-closed).
+That includes `synchronous_mode_strict`: with no standby able to confirm, both
+labs block writes rather than degrading to asynchronous. See
+[`SLA.md`](../SLA.md#the-exception-being-closed) for the trade it makes.
 
 ## Data at rest
 
@@ -165,31 +164,31 @@ From an empty machine:
 ==============================================================================
  Lab 2 results
 ==============================================================================
- PASS  Create the four Lima VMs                                          3m18s
- PASS  Install and configure the Patroni cluster                         1m59s
+ PASS  Create the four Lima VMs                                          4m23s
+ PASS  Install and configure the Patroni cluster                         6m58s
  PASS  Cluster services, quorum, replication, pgBackRest                    4s
- PASS  Encryption at rest: LUKS2 volumes, and a missing one stops the service      45s
+ PASS  Encryption at rest: LUKS2 volumes, and a missing one stops the service      41s
  PASS  PKI: certificates assert the right identities                        1s
  PASS  Encryption in transit: every channel, plaintext refused              2s
  PASS  Identity: verification fails closed on a wrong CA                    1s
- PASS  Criterion 1: client connects to the primary and queries it           1s
- PASS  Client guarantees: pool limit, timeouts, no blind retry             16s
- PASS  Quorum commit: configured, blocking, and lossless                 1m00s
- PASS  Criterion 2: failover after the primary VM is lost                  57s
- PASS  Criterion 2: failover after PostgreSQL is killed                    12s
+ PASS  Criterion 1: client connects to the primary and queries it           0s
+ PASS  Client guarantees: pool limit, timeouts, no blind retry             17s
+ PASS  Quorum commit: configured, blocking, strict, and lossless         3m03s
+ PASS  Criterion 2: failover after the primary VM is lost                  59s
+ PASS  Criterion 2: failover after PostgreSQL is killed                    14s
  PASS  Split brain: softdog fences a frozen Patroni                        37s
- PASS  Split brain: Patroni demotes itself without etcd                    57s
+ PASS  Split brain: Patroni demotes itself without etcd                    48s
 ------------------------------------------------------------------------------
- 14 passed, 0 failed, total 10m11s
+ 14 passed, 0 failed, total 18m11s
 ==============================================================================
 ```
 
 The four encryption checks sit above the Lab 1 ones deliberately: if the cluster
 is not encrypted there is little point asking whether it fails over correctly.
 
-That block is one run. Across seven consecutive from-scratch builds the aggregate
-is less uniform, and worth stating rather than leaving a single green result to
-imply reliability:
+That block is one run. Across the seven consecutive from-scratch builds that
+preceded `synchronous_mode_strict` the aggregate was less uniform, and it is
+worth stating rather than leaving a single green result to imply reliability:
 
 | Criterion | Checks | Result |
 | --- | --- | --- |

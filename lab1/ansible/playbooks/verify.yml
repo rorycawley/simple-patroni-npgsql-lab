@@ -91,6 +91,20 @@
           lab1-{{ (lab1_patroni_topology.stdout | from_json
           | selectattr('Role', 'equalto', 'Leader') | map(attribute='Member') | first) }}
 
+    # Lab 1 asserted nothing about SELinux until now, so it could have been
+    # running Permissive without anything saying so. Lab 2 caught exactly that on
+    # two of three nodes; the same image builds both labs.
+    - name: Read the SELinux mode
+      ansible.builtin.command: getenforce
+      register: lab1_selinux_mode
+      changed_when: false
+
+    - name: Assert SELinux is enforcing
+      ansible.builtin.assert:
+        that:
+          - lab1_selinux_mode.stdout | trim == 'Enforcing'
+        fail_msg: "SELinux is '{{ lab1_selinux_mode.stdout | trim }}', expected Enforcing."
+
     # Page-level checksums are how PostgreSQL detects corruption before it is
     # replicated to every standby and copied faithfully into every backup. They
     # can only be set at initdb time, so a cluster built without them cannot
