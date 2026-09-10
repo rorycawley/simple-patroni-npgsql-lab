@@ -91,6 +91,27 @@
           lab1-{{ (lab1_patroni_topology.stdout | from_json
           | selectattr('Role', 'equalto', 'Leader') | map(attribute='Member') | first) }}
 
+    # Page-level checksums are how PostgreSQL detects corruption before it is
+    # replicated to every standby and copied faithfully into every backup. They
+    # can only be set at initdb time, so a cluster built without them cannot
+    # gain them later without a rebuild -- and PostgreSQL 18 enabling them by
+    # default is exactly the kind of default that nothing checks and can drift.
+    - name: Read data_checksums
+      ansible.builtin.command: >-
+        /usr/pgsql-18/bin/psql -Atc "show data_checksums"
+      become_user: postgres
+      register: lab1_checksums
+      changed_when: false
+
+    - name: Assert page checksums are enabled
+      ansible.builtin.assert:
+        that:
+          - lab1_checksums.stdout | trim == 'on'
+        fail_msg: >-
+          data_checksums is '{{ lab1_checksums.stdout | trim }}', expected 'on'.
+          Silent corruption would be replicated and backed up undetected, and
+          this cannot be changed without rebuilding the cluster.
+
     - name: Check pgBackRest on the current primary
       ansible.builtin.command: pgbackrest --stanza={{ lab1_cluster_name }} check
       become_user: postgres

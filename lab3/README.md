@@ -51,7 +51,7 @@ is "get the data out of here".
 | --- | --- |
 | A pgBackRest repository on MinIO, off the database hosts | Restoring from it — that is [Lab 4](../lab4/README.md) |
 | `pg_dump` of `appdb`, scheduled and stored in the same repository | Cross-region or offsite replication of the repository |
-| Repository encryption (`repo1-cipher-type=aes-256-cbc`) and TLS to MinIO | A second, independent repository |
+| Repository encryption (`repo1-cipher-type=aes-256-cbc`) and TLS to MinIO | A second, independent repository — see the limitation below |
 | Backups and WAL archiving that survive a failover | Backup of etcd — see below |
 | Full and incremental backups, with retention | Tuning for databases large enough to need parallel restore |
 
@@ -59,6 +59,17 @@ is "get the data out of here".
 rebuild — leader keys, member lists, the sync set. What cannot be rebuilt is the
 PostgreSQL data, and that is what this lab protects. Backing up a leader key
 would restore a lie.
+
+### The repository is a single point of failure
+
+Stated rather than left implicit, because it is the largest gap between this lab
+and the outcome it serves. One MinIO instance holds every backup: lose it and the
+cluster is back to having no recoverable history, however healthy it looks.
+
+pgBackRest supports a second repository, and production designs use one. It is
+out of scope here for the same reason a Tang server was in Lab 2 — resources on a
+single laptop — and that is an accepted limitation of the lab, not a claim that
+one repository is sufficient.
 
 ## Where the repository lives
 

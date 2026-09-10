@@ -7,6 +7,41 @@ of the primary without losing an acknowledged transaction.
 Every lab builds from nothing with two commands and proves its claims with
 executable checks rather than prose.
 
+## What the series is for
+
+Two outcomes, stated precisely, because both are easy to overclaim.
+
+**1. No acknowledged transaction is lost to infrastructure failure.** Quorum
+commit with `synchronous_mode_strict` means a commit is not acknowledged until a
+second node holds it, so no node failure, promotion or fence can lose one. Page
+checksums catch corruption before it is replicated and copied into every backup.
+Backups and a rehearsed restore cover losing every node at once.
+
+Two things sit outside that claim, deliberately:
+
+- **In-flight work that was never acknowledged can be lost.** That is correct and
+  unavoidable. The client's job is to know that it does not know, which is why it
+  reports an uncertain commit rather than reissuing it.
+- **Recovering from a *logical* error costs data on purpose.** Rewinding to a
+  point before a bad migration discards every transaction committed after it.
+  That is the recovery mechanism rather than a defect, and
+  [Lab 6](lab6/README.md) measures the cost instead of hiding it — which is also
+  why the series keeps a logical dump alongside the physical backup, so a single
+  table can be restored before the whole cluster is rewound.
+
+The guarantee is therefore about *infrastructure* failure. Against a mistake, the
+labs offer the cheapest instrument that works.
+
+**2. PostgreSQL stays available across the loss of any one node.** Automatic
+promotion, fencing so a partitioned primary cannot keep serving, and a client
+that finds the new primary by itself. Measured rather than asserted:
+[`SLA.md`](SLA.md) gives RPO and RTO per failure mode.
+
+Its limits are equally explicit. Losing **two** of three nodes is read-only
+either way, because etcd quorum goes with them. And durability is chosen over
+availability where they conflict, so if every standby is unavailable the cluster
+blocks writes rather than accepting one it cannot make durable.
+
 ## Where things are documented
 
 Each file below owns one subject and does not repeat another's.
@@ -130,6 +165,12 @@ to all three nodes and uses Npgsql's `Target Session Attributes=primary`, so the
 driver — not a proxy — is what finds the current primary. That is the point of
 the exercise: it puts the failover burden on the application, where these labs
 can then measure whether it is carried correctly.
+
+Page checksums are enabled at `initdb` time on every lab, and `verify_cluster`
+asserts it. They are what turns silent corruption into a detected error before it
+is replicated to both standbys and copied faithfully into every backup — and they
+cannot be added later without rebuilding the cluster, which is why a default
+nothing checks is worth checking.
 
 Authentication is a least-privilege, non-superuser `app_runtime` login,
 permitted by a narrow `pg_hba` rule scoped to the client network and
