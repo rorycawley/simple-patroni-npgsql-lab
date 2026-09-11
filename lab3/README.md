@@ -1,12 +1,14 @@
 # Lab 3: durable backups
 
-> **Status: built and verified.** All six acceptance criteria are met:
-> `make all` is **23 of 23 in 9m19s**, covering every check this lab adds
-> alongside every check inherited from Labs 1 and 2. That run was against
-> existing VMs; the last from-scratch build was 14m02s, before this lab's own
-> checks existed. What this lab does **not** claim is that any of it can be
-> restored — that is [Lab 4](../lab4/README.md), and keeping them apart is the
-> point.
+> **Status: built and verified.** All six acceptance criteria are met, and
+> `make all` is **23 of 23 from nothing in 15m04s** — no VMs, no disks, no
+> secrets, no repository and no passphrases to begin with, and every check this
+> lab adds passing alongside every one inherited from Labs 1 and 2.
+>
+> What this lab does **not** claim is that any of it can be restored. That is
+> [Lab 4](../lab4/README.md), and keeping the two apart is the point: a
+> repository that accepts writes and verifies is evidence that *taking* a backup
+> works, and nothing more.
 
 The shared components, cluster design and prerequisites are in the
 [top-level README](../README.md). This file covers Lab 3 only: what it must
