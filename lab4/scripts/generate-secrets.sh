@@ -12,10 +12,13 @@ command -v openssl >/dev/null 2>&1 || {
   exit 1
 }
 
-umask 077
-mkdir -p "$SECRETS_DIR"
+readonly RECOVERY_DIR="$LAB_DIR/.recovery-inputs"
+readonly REPO_SECRETS="$RECOVERY_DIR/repo.yml"
 
-touch "$CLUSTER_SECRETS"
+umask 077
+mkdir -p "$SECRETS_DIR" "$RECOVERY_DIR"
+
+touch "$CLUSTER_SECRETS" "$REPO_SECRETS"
 
 # Add a secret only if it is absent, never rewrite one that exists. A later lab
 # adding a credential must not silently rotate the passwords a running cluster
@@ -23,23 +26,53 @@ touch "$CLUSTER_SECRETS"
 # its own configuration and in the DCS, so changing them here breaks
 # replication at a moment of its choosing.
 ensure_secret() {
-  local key="$1" value="$2"
-  grep -q "^$key:" "$CLUSTER_SECRETS" && return 0
-  printf '%s: "%s"\n' "$key" "$value" >> "$CLUSTER_SECRETS"
-  echo "  added $key"
+  local file="$1" key="$2" value="$3"
+  grep -q "^$key:" "$file" && return 0
+  printf '%s: "%s"\n' "$key" "$value" >> "$file"
+  echo "  added $key to ${file##*/}"
 }
 
-ensure_secret postgres_superuser_password   "$(openssl rand -hex 24)"
-ensure_secret postgres_replication_password "$(openssl rand -hex 24)"
-ensure_secret app_runtime_password          "$(openssl rand -hex 24)"
+# These three die with the cluster, and are meant to. Rung 6 rebuilds onto fresh
+# machines with NEW values for all of them and resets the restored roles to
+# match -- so nothing here has to survive a disaster.
+ensure_secret "$CLUSTER_SECRETS" postgres_superuser_password   "$(openssl rand -hex 24)"
+ensure_secret "$CLUSTER_SECRETS" postgres_replication_password "$(openssl rand -hex 24)"
+ensure_secret "$CLUSTER_SECRETS" app_runtime_password          "$(openssl rand -hex 24)"
 
 # MinIO gets two identities, for the same reason the database does not run as a
-# superuser. The root credential administers the object store and never leaves
-# this machine; the nodes get a separate key scoped to the one bucket.
-ensure_secret minio_root_user        "lab4-admin"
-ensure_secret minio_root_password    "$(openssl rand -hex 24)"
-ensure_secret minio_backup_access_key "lab4-pgbackrest"
-ensure_secret minio_backup_secret_key "$(openssl rand -hex 24)"
+# superuser. The root credential administers the object store; the nodes get a
+# separate key scoped to the one bucket.
+#
+# Both are RECOVERY INPUTS, not cluster secrets. They describe how to reach the
+# surviving repository, so they have to outlive the cluster that used them --
+# the object store keeps its IAM configuration inside .minio/, and regenerating
+# these would leave a repository full of intact backups that nothing holds the
+# keys to. In production this is the difference between losing your database and
+# losing your database *and* the credentials for the bucket holding its backups.
+migrate_to_recovery_inputs() {
+  local key="$1" value
+  grep -q "^$key:" "$REPO_SECRETS" && return 0
+  value="$(sed -n "s/^$key: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS")"
+  [[ -n "$value" ]] || return 1
+  printf '%s: "%s"\n' "$key" "$value" >> "$REPO_SECRETS"
+  # Carried across with its VALUE intact, never regenerated: the surviving
+  # object store already knows this key, and a new one would leave a repository
+  # full of intact backups that nothing can authenticate to.
+  #
+  # Then dropped from cluster.yml, so there is one source of truth. Two copies
+  # means someone edits the dead one and wonders why nothing changed.
+  grep -v "^$key:" "$CLUSTER_SECRETS" > "$CLUSTER_SECRETS.tmp" \
+    && mv "$CLUSTER_SECRETS.tmp" "$CLUSTER_SECRETS"
+  echo "  moved $key into ${REPO_SECRETS##*/} (it must survive 'make clean')"
+}
+for key in minio_root_user minio_root_password \
+           minio_backup_access_key minio_backup_secret_key; do
+  migrate_to_recovery_inputs "$key" || true
+done
+ensure_secret "$REPO_SECRETS" minio_root_user         "lab4-admin"
+ensure_secret "$REPO_SECRETS" minio_root_password     "$(openssl rand -hex 24)"
+ensure_secret "$REPO_SECRETS" minio_backup_access_key "lab4-pgbackrest"
+ensure_secret "$REPO_SECRETS" minio_backup_secret_key "$(openssl rand -hex 24)"
 
 # The repository cipher passphrase is deliberately NOT one of the above.
 #
@@ -53,10 +86,6 @@ ensure_secret minio_backup_secret_key "$(openssl rand -hex 24)"
 # to the build rather than a product of it. In production that input comes from
 # a secrets manager or a sealed offline copy; here, from this file or from
 # LAB4_REPO_CIPHER_PASS.
-readonly RECOVERY_DIR="$LAB_DIR/.recovery-inputs"
-readonly REPO_SECRETS="$RECOVERY_DIR/repo.yml"
-mkdir -p "$RECOVERY_DIR"
-touch "$REPO_SECRETS"
 if ! grep -q '^repo_cipher_pass:' "$REPO_SECRETS"; then
   printf 'repo_cipher_pass: "%s"\n' \
     "${LAB4_REPO_CIPHER_PASS:-$(openssl rand -hex 32)}" >> "$REPO_SECRETS"

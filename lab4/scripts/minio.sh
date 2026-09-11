@@ -26,6 +26,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly PKI_DIR="$LAB_DIR/.secrets/pki"
 readonly CLUSTER_SECRETS="$LAB_DIR/.secrets/cluster.yml"
+readonly REPO_SECRETS="$LAB_DIR/.recovery-inputs/repo.yml"
 
 # Deliberately NOT under .secrets/: `make clean` wipes that, and the whole
 # premise of Lab 4 is that the cluster can be destroyed while the backups
@@ -63,7 +64,15 @@ for required in minio mc openssl; do
     echo "$required is required (brew install $required)" >&2; exit 1; }
 done
 
-secret() { sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS"; }
+# The object store's own credentials are recovery inputs, not cluster secrets --
+# they have to outlive `make clean` along with the repository they unlock. Both
+# files are searched so a lab built before that split still works.
+secret() {
+  local v
+  v="$(sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$REPO_SECRETS" 2>/dev/null)"
+  [[ -n "$v" ]] || v="$(sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS" 2>/dev/null)"
+  printf '%s\n' "$v"
+}
 
 gateway_ip() {
   [[ -f "$LAB_DIR/.env" ]] || { echo "Run make create_vms first" >&2; exit 1; }

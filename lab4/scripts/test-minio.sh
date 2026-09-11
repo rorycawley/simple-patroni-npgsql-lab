@@ -18,6 +18,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly PKI_DIR="$LAB_DIR/.secrets/pki"
 readonly CLUSTER_SECRETS="$LAB_DIR/.secrets/cluster.yml"
+readonly REPO_SECRETS="$LAB_DIR/.recovery-inputs/repo.yml"
 readonly MC_DIR="$LAB_DIR/.minio/mc"
 readonly GUEST_CA=/etc/lab4/pki/ca.crt
 # The database nodes only. pgBackRest runs where PostgreSQL runs, so the
@@ -30,7 +31,14 @@ readonly BUCKET=lab4-backups
 command -v mc >/dev/null 2>&1 || { echo "mc is required" >&2; exit 1; }
 [[ -f "$CLUSTER_SECRETS" ]] || { echo "Run make configure_cluster first" >&2; exit 1; }
 
-secret() { sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS"; }
+# Recovery inputs first: the object store's credentials must survive `make clean`
+# alongside the repository, so they live in .recovery-inputs/.
+secret() {
+  local v
+  v="$(sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$REPO_SECRETS" 2>/dev/null)"
+  [[ -n "$v" ]] || v="$(sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS" 2>/dev/null)"
+  printf '%s\n' "$v"
+}
 ENDPOINT="$("$SCRIPT_DIR/minio.sh" url)"
 readonly ENDPOINT
 
