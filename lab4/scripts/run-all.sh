@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the Lab 3 phases in order and prints one summary at the end.
+# Runs the Lab 4 phases in order and prints one summary at the end.
 #
 #   all     Create the VMs, configure the cluster, then run every check.
 #   check   Run every check against a cluster that is already configured.
@@ -11,7 +11,7 @@ set -uo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-readonly VM_NAMES=(lab3-pg1 lab3-pg2 lab3-pg3)
+readonly VM_NAMES=(lab4-pg1 lab4-pg2 lab4-pg3)
 readonly PATRONI_CONFIG=/etc/patroni/patroni.yml
 
 names=()
@@ -64,7 +64,7 @@ summary() {
 
   printf '\n'
   printf '%s\n' '=============================================================================='
-  printf ' Lab 3 results\n'
+  printf ' Lab 4 results\n'
   printf '%s\n' '=============================================================================='
   for index in "${!names[@]}"; do
     # The width must clear the longest phase label, or the duration column wraps.

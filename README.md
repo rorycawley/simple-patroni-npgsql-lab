@@ -32,7 +32,7 @@ point of the exercise.
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | **Built and verified** |
 | [2](lab2/README.md) | Every Lab 1 guarantee, now on LUKS2 volumes — PostgreSQL and etcd on separate devices — with TLS on every channel, mutual where the peer is a machine | **Built and verified** |
 | [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **Built and verified** |
-| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | Specified |
+| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | **In progress** — forked and building green; no criterion met yet |
 | [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | Specified |
 | [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
 | [7](lab7/README.md) | Schema migration with Flyway — no downtime, and what survives a failover mid-migration | Specified |

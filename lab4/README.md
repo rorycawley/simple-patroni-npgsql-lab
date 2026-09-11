@@ -1,12 +1,48 @@
 # Lab 4: recovery
 
-> **Status: specified, not built.** Everything below is the design and its
-> acceptance criteria. No results are claimed.
+> **Status: in progress — P0 of [`PLAN.md`](PLAN.md) complete.** The lab builds
+> from nothing and passes every check inherited from Lab 3, on a cluster that now
+> has a third encrypted volume to restore into. That is the baseline, not the
+> lab: **no acceptance criterion below is met yet, because nothing has been
+> restored.** Everything below is the design and its criteria.
 
 The shared components, cluster design and prerequisites are in the
 [top-level README](../README.md). This file covers Lab 4 only: the recovery
 options, and how each is judged. [`PLAN.md`](PLAN.md) covers how it gets built —
-the phases, their order, and the two risks worth watching.
+the phases, their order, and the risks worth watching.
+
+## It does not need Lab 3
+
+Lab 4 began as a copy of [Lab 3](../lab3/README.md), and that is where the
+resemblance ends. It is a **standalone lab**, on the same terms as Lab 2 is to
+Lab 1: it builds, runs and tears down with Lab 3 deleted, never built, or running
+beside it.
+
+Nothing is shared. Every name that could collide is this lab's own:
+
+| | Lab 3 | Lab 4 |
+| --- | --- | --- |
+| VMs and Lima disks | `lab3-*` | `lab4-*` |
+| Object store port | 9100 | **9200** |
+| Bucket | `lab3-backups` | `lab4-backups` |
+| pgBackRest stanza | `lab3` | `lab4` |
+| Repository on disk | `lab3/.minio/` | `lab4/.minio/` |
+| Recovery inputs | `lab3/.recovery-inputs/` | `lab4/.recovery-inputs/` |
+| Guest configuration | `/etc/lab3` | `/etc/lab4` |
+| Certificate domain | `lab3.example` | `lab4.example` |
+
+The separation is not cosmetic. Two labs sharing a bucket would share a stanza,
+and a pgBackRest stanza belongs to **one** database — the constraint Lab 3 found
+the hard way. Two labs sharing a port could not be built while the other ran,
+which is the property that makes a lab a lab rather than a stage in someone's
+afternoon.
+
+**One file is deliberately shared**: [`RUNBOOKS.md`](../RUNBOOKS.md) at the
+repository root, which every lab lints against its own cluster. That is the
+point of it — a runbook that only matched one lab would not be a runbook.
+
+What this lab borrows from Lab 3 is *design*, copied in: the object store, the
+encrypted stanza, the leader-gated jobs. Not its data, and not its presence.
 
 ## Goal
 
@@ -64,9 +100,10 @@ but what each lab is for:
 | **Lab 4** | The **mechanisms** — every rung that reads the repository, and what each costs | *Does recovery work, and which rung should I reach for?* |
 | **[Lab 8](../lab8/README.md)** | One **scenario** — a migration that succeeded and was wrong | *What does undoing this particular mistake cost me?* |
 
-So point-in-time recovery is proven here (AC-3, an exact boundary) and *applied*
-there, against a bad migration, where the interesting question is not whether it
-works but how many committed transactions it discards.
+So point-in-time recovery is proven here — AC-4, an exact boundary in both
+directions — and *applied* there, against a bad migration, where the interesting
+question is not whether it works but how many committed transactions it
+discards.
 
 ## What "total loss" means here
 

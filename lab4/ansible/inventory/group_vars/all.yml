@@ -1,0 +1,114 @@
+---
+lab4_cluster_name: lab4
+lab4_patroni_namespace: /service/
+lab4_postgres_data_dir: /var/lib/pgsql/data
+# Where a restored copy goes. Its own encrypted volume, never beneath
+# /var/lib/pgsql: restoring under the live data directory is how a recovery
+# damages the thing it is recovering.
+lab4_restore_dir: /var/lib/pgsql-restore
+lab4_postgres_bin_dir: /usr/pgsql-18/bin
+lab4_etcd_data_dir: /var/lib/etcd/lab4
+
+# Each service's data directory sits on its own block device. Sizes must stay
+# distinct from each other and from the root disk: the guest resolves which
+# device is which by size, because attachment order is not a contract.
+lab4_volume_fstype: xfs
+lab4_config_dir: /etc/lab4
+lab4_luks_key_dir: "{{ lab4_config_dir }}/luks"
+
+# TLS material. One certificate per purpose rather than one per node, so that a
+# stolen key for one service cannot authenticate as another. The owner is the
+# service that reads the key: PostgreSQL and etcd both refuse to start on a key
+# that is group- or world-readable.
+lab4_pki_dir: "{{ lab4_config_dir }}/pki"
+# etcd requires a client certificate once client-cert-auth is on, so every
+# etcdctl invocation needs these. Defined once rather than per call site.
+lab4_etcdctl_tls: >-
+  --cacert {{ lab4_pki_dir }}/ca.crt
+  --cert {{ lab4_pki_dir }}/etcd.crt
+  --key {{ lab4_pki_dir }}/etcd.key
+# Backup repository (Lab 4). The object store runs on the control machine and is
+# reached at the Lima shared-network gateway -- the same address the firewall
+# already permits for psql debugging. Port 9200: 9000 is the sibling lab's and
+# 9100 is Lab 3's, and a lab that cannot be built while another runs is not
+# standalone.
+lab4_repo_bucket: lab4-backups
+lab4_repo_path: /pgbackrest
+lab4_repo_endpoint: "{{ lab4_host_gateway_ip }}"
+lab4_repo_port: 9200
+lab4_repo_region: us-east-1
+lab4_repo_uri_style: path
+
+# The backup job. Installed on all three nodes; the leader gate decides which
+# one actually runs it. Intervals are compressed so a single `make all` run
+# observes a real chain -- a full plus incrementals -- rather than one backup.
+# A production cluster would take the full weekly and incrementals nightly.
+lab4_backup_bin_dir: /usr/local/lib/lab4
+lab4_patroni_rest_port: 8008
+lab4_backup_full_on_boot: 90s
+lab4_backup_full_interval: 30min
+lab4_backup_incr_on_boot: 3min
+lab4_backup_incr_interval: 2min
+
+# The logical dump. Its prefix sits OUTSIDE repo1-path so pgBackRest's retention
+# can never reap it -- which also makes expiring old dumps this lab's own job.
+lab4_appdb_name: appdb
+lab4_dump_prefix: dumps
+lab4_dump_pass_file: "{{ lab4_config_dir }}/dump.pass"
+lab4_dump_retention: 3
+lab4_dump_on_boot: 2min
+lab4_dump_interval: 10min
+
+lab4_app_dir: /opt/lab4-client
+lab4_app_secrets_dir: /etc/lab4/client
+lab4_app_publish_dir: "{{ playbook_dir }}/../../client/publish/linux-arm64"
+lab4_pki_source: "{{ playbook_dir }}/../../.secrets/pki"
+lab4_tls_identities:
+  - name: postgres
+    owner: postgres
+  - name: patroni
+    owner: postgres
+  - name: dcs-client
+    owner: postgres
+  - name: etcd
+    owner: etcd
+lab4_data_volumes:
+  - name: pgdata
+    path: /var/lib/pgsql
+    gib: 10
+  - name: etcd
+    path: /var/lib/etcd
+    gib: 5
+  # Somewhere to restore to. A restored copy is a COMPLETE copy of production and
+  # does not become less sensitive by being a copy, so it gets the same treatment
+  # as the data directory rather than landing on the root filesystem. Sized like
+  # pgdata because that is exactly what it holds. Distinct from every other size:
+  # the guest identifies devices by size, not by attachment order.
+  - name: restore
+    path: "{{ lab4_restore_dir }}"
+    gib: 12
+lab4_lima_management_cidr: 192.168.5.0/24
+
+# The macOS side of Lima's managed shared network. It is the only non-cluster
+# source allowed to reach PostgreSQL, in both the firewall and pg_hba, so a wrong
+# value locks the client out with a bare connection timeout. Lima puts macOS on
+# <shared subnet>.1, which the playbooks derive from the VM addresses; set this
+# override if your Lima network uses a different gateway address.
+lab4_host_gateway_ip_override: ""
+
+# The application VM is where the client now runs, so that is what must reach
+# PostgreSQL. The macOS gateway stays allowed for psql debugging: it uses
+# OpenSSL and can negotiate TLS 1.3, unlike .NET on macOS.
+lab4_postgres_client_cidrs:
+  - "{{ hostvars[groups['app_nodes'][0]].lab4_node_ip }}/32"
+  - "{{ lab4_host_gateway_ip }}/32"
+
+lab4_firewall_interfaces:
+  - eth0
+  - lima0
+
+lab4_cluster_ports:
+  - 2379 # etcd client
+  - 2380 # etcd peer
+  - 5432 # PostgreSQL and streaming replication
+  - 8008 # Patroni REST API

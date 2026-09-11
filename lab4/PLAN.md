@@ -72,7 +72,28 @@ needs. Building total loss first would leave the most-used procedure until last.
 | **P2, P3, P4** | `configure_cluster`, `verify_cluster`, plus that phase's checks | Rebuilding one standby, restoring beside, and restoring one table must all leave the cluster serving — which is the property under test, not a reason to run the whole suite |
 | **P5, P6** | `make all` | Both rewind or rebuild the cluster. Everything the earlier labs assert has to hold afterwards, or the recovery produced something that only looks like a cluster |
 
-### P0 — Fork Lab 3, and add somewhere to restore to
+### P0 — Fork Lab 3, and add somewhere to restore to — **done**
+
+> Built from nothing: **23 phases, 22 passing on the first run**, and 20 of 20 on
+> re-check after the one failure was fixed. The restore volume is a distinct
+> `crypto_LUKS` device on `/dev/vdd`, mounted at `/var/lib/pgsql-restore`,
+> `postgres:postgres 0700` and empty, on all three nodes.
+>
+> **The one failure was a check written yesterday, not the lab.**
+> `test_repository` inspects backups but ran *before* `test_backup` created any,
+> so on a genuinely fresh build there were none — and the assertion above it,
+> "everything listed is in the bucket", **passed vacuously on zero items**. Both
+> fixed, in Lab 3 as well: the phase order now guarantees a backup exists, and an
+> empty repository fails that check instead of satisfying it.
+>
+> Lab 3 had only ever passed it because its timers had been running for hours.
+> It was timing-dependent and would have failed there too from scratch.
+>
+> Independence from Lab 3 is now asserted rather than audited. `test_minio`
+> checks that **no executable file in this lab names another lab**, ignoring
+> comments — a citation is provenance, a name is a shared stanza or port. Proven
+> to fail by injecting `lab3-backups` into a script and watching it catch it.
+
 
 **What.** `lab4/` becomes a working copy of Lab 3, renamed, plus a third
 encrypted volume that exists only to hold restored copies.

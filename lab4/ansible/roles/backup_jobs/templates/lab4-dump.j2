@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# A logical dump of {{ lab4_appdb_name }}, encrypted before it leaves this node.
+#
+# This is not a second disaster recovery system. pgBackRest is that. A dump earns
+# its place by doing two things pgBackRest cannot: recover ONE table without
+# rewinding the cluster, and prove the data is *readable* -- it reads every row
+# through PostgreSQL's own executor, so a dump that completes is evidence a
+# physical backup cannot give, because pgBackRest copies a corrupt page just as
+# faithfully as a good one.
+#
+# WHERE IT RUNS, AND WHY THAT IS A CHOICE
+#
+# On the leader, gated exactly like the backup job. The alternative is a standby,
+# which keeps the read load off the primary -- but a long dump there can be
+# cancelled mid-run by a recovery conflict as replay invalidates rows it is still
+# reading, and the fix (hot_standby_feedback = on) moves the cost back to the
+# primary as table bloat. Both are defensible; picking silently is not. This lab
+# picks the leader because the database is small and the failure mode of the
+# alternative is a dump that vanishes under load, which is the one thing a
+# verification pass must not do.
+#
+# WHY IT IS ENCRYPTED HERE AND NOT BY pgBackRest
+#
+# repo1-cipher-pass protects only what pgBackRest writes. This file is written
+# outside repo1-path on purpose, so pgBackRest's retention can never reap it --
+# which also means its encryption is nobody's job but this script's. Uploaded as
+# it comes out of pg_dump, it would sit in the same bucket in plaintext beside
+# the encrypted backups, protecting exactly half the data.
+set -uo pipefail
+
+readonly STANZA={{ lab4_cluster_name }}
+readonly DB={{ lab4_appdb_name }}
+readonly GATE={{ lab4_backup_bin_dir }}/lab4-leader-gate
+readonly PASSFILE={{ lab4_dump_pass_file }}
+readonly BUCKET={{ lab4_repo_bucket }}
+readonly PREFIX={{ lab4_dump_prefix }}
+readonly KEEP={{ lab4_dump_retention }}
+# Signed uploads go through this rather than curl: the curl on Rocky 9 is 7.76.1,
+# whose --aws-sigv4 MinIO rejects with SignatureDoesNotMatch. Measured, not
+# assumed -- the flag exists, which is not the same as the feature working.
+readonly S3={{ lab4_backup_bin_dir }}/lab4-s3
+
+"$GATE"
+case $? in
+  0) ;;
+  1) echo "Not the leader; no dump taken on this node."; exit 0 ;;
+  *) echo "Refusing to run: leadership could not be determined." >&2; exit 1 ;;
+esac
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+readonly OBJECT="$PREFIX/${DB}-${stamp}.dump.enc"
+
+echo "Leader confirmed; dumping $DB."
+# Custom format: selective restore of individual tables is the entire point, and
+# only -Fc supports it.
+pg_dump --format=custom --dbname="$DB" --username=dumper --file="$workdir/dump" || {
+  echo "pg_dump failed; nothing uploaded." >&2; exit 1; }
+
+# pbkdf2 rather than the legacy key derivation, which OpenSSL warns about and
+# which is trivially brute-forced.
+openssl enc -aes-256-cbc -pbkdf2 -salt \
+  -in "$workdir/dump" -out "$workdir/dump.enc" -pass "file:$PASSFILE" || {
+  echo "encryption failed; nothing uploaded." >&2; exit 1; }
+
+echo "Uploading $OBJECT ($(stat -c%s "$workdir/dump.enc") bytes, encrypted)."
+"$S3" put "$workdir/dump.enc" "$OBJECT" || { echo "upload failed." >&2; exit 1; }
+
+# Retention is this script's job precisely because the dumps live outside
+# repo1-path: pgBackRest's expire cannot see them, so nothing else will ever
+# remove them.
+keys="$("$S3" list "$PREFIX/" 2>/dev/null | sort)"
+
+total="$(printf '%s\n' "$keys" | grep -c . || true)"
+if (( total > KEEP )); then
+  printf '%s\n' "$keys" | head -n "$(( total - KEEP ))" | while IFS= read -r old; do
+    [[ -z "$old" ]] && continue
+    echo "Expiring old dump: $old"
+    "$S3" delete "$old" || true
+  done
+fi
+
+echo "Dump complete: $OBJECT"

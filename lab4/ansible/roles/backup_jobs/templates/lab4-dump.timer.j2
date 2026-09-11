@@ -1,0 +1,14 @@
+[Unit]
+Description=Take an encrypted logical dump of the application database
+
+[Timer]
+# A slower cycle than pgBackRest on purpose: the dump's job is surgical recovery
+# and verification, not recency. pgBackRest is what bounds data loss.
+OnBootSec={{ lab4_dump_on_boot }}
+OnUnitActiveSec={{ lab4_dump_interval }}
+Unit=lab4-dump.service
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

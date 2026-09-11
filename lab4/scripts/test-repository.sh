@@ -16,10 +16,10 @@ set -uo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-readonly VM_NAMES=(lab3-pg1 lab3-pg2 lab3-pg3)
-readonly VM_PREFIX="lab3-"
-readonly STANZA=lab3
-readonly BIN=/usr/local/lib/lab3
+readonly VM_NAMES=(lab4-pg1 lab4-pg2 lab4-pg3)
+readonly VM_PREFIX="lab4-"
+readonly STANZA=lab4
+readonly BIN=/usr/local/lib/lab4
 readonly LOCAL_REPO=/var/lib/pgbackrest
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
@@ -59,7 +59,7 @@ labels="$(jq -r '.[0].backup[].label' <<< "$info")"
 missing=0
 while IFS= read -r label; do
   [[ -z "$label" ]] && continue
-  found="$(on "$node" sudo "$BIN/lab3-s3" list "pgbackrest/backup/$STANZA/$label/" | grep -c . || true)"
+  found="$(on "$node" sudo "$BIN/lab4-s3" list "pgbackrest/backup/$STANZA/$label/" | grep -c . || true)"
   (( found > 0 )) || { fail "$label is listed by info but has no objects in the bucket"; missing=1; }
 done <<< "$labels"
 count="$(grep -c . <<< "$labels" || true)"

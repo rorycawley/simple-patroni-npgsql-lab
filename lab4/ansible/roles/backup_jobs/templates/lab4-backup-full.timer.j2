@@ -1,0 +1,14 @@
+[Unit]
+Description=Take a full pgBackRest backup
+
+[Timer]
+# Compressed for a lab. A real cluster takes a full weekly and incrementals
+# nightly; here one `make all` run has to observe a whole chain.
+OnBootSec={{ lab4_backup_full_on_boot }}
+OnUnitActiveSec={{ lab4_backup_full_interval }}
+Unit=lab4-backup@full.service
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

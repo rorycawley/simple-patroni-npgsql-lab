@@ -1,0 +1,38 @@
+---
+- name: Install the Lab 4 PostgreSQL node baseline
+  hosts: patroni_nodes
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify the complete three-node inventory is available
+      ansible.builtin.assert:
+        that:
+          - groups['patroni_nodes'] | length == 3
+          - hostvars[item].lab4_node_ip is defined
+        fail_msg: Run make create_vms before this playbook.
+      loop: "{{ groups['patroni_nodes'] }}"
+
+    - name: Record the three node IP addresses
+      ansible.builtin.set_fact:
+        lab4_peer_ips: "{{ groups['patroni_nodes'] | map('extract', hostvars, 'lab4_node_ip') | list }}"
+
+    - name: Assert the three nodes share one Lima shared subnet
+      ansible.builtin.assert:
+        that:
+          - "(lab4_peer_ips | map('regex_replace', '\\.[0-9]+$', '') | unique | list | length) == 1"
+        fail_msg: >-
+          The VMs are not on one /24 shared subnet ({{ lab4_peer_ips | join(', ') }}),
+          so the macOS gateway address cannot be derived from them. Set
+          lab4_host_gateway_ip_override in inventory/group_vars/all.yml.
+
+    - name: Record the macOS address on the Lima shared subnet
+      ansible.builtin.set_fact:
+        lab4_host_gateway_ip: "{{ lab4_host_gateway_ip_override or (lab4_node_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
+
+  roles:
+    # Before postgres_node: the package installs create /var/lib/pgsql and
+    # /var/lib/etcd, and anything written there before the mount would be
+    # hidden by it rather than stored on the volume.
+    - role: data_volumes
+    - role: postgres_node

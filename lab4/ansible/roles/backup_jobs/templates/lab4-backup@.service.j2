@@ -1,0 +1,12 @@
+[Unit]
+Description=pgBackRest %i backup (leader only)
+# The repository is remote, so there is no point starting before the network is
+# up -- and none before PostgreSQL, since a backup connects to it.
+After=network-online.target percona-patroni.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart={{ lab4_backup_bin_dir }}/lab4-backup %i

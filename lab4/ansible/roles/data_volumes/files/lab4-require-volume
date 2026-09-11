@@ -1,0 +1,23 @@
+#!/bin/bash
+# Refuse to let a service start unless its data volume is genuinely mounted.
+#
+# RequiresMountsFor= catches a mount that FAILS. It cannot catch a mount that
+# was never configured: with no mount unit for the path the directive is a
+# no-op, the service starts on the root filesystem, and PostgreSQL initialises
+# an empty data directory over the mountpoint while reporting a healthy node.
+# This closes that gap.
+set -euo pipefail
+
+path="${1:?usage: lab4-require-volume <path> <expected-device>}"
+expected="${2:?usage: lab4-require-volume <path> <expected-device>}"
+
+if ! mountpoint -q "$path"; then
+    echo "lab4: $path is not a mount point; refusing to start on the root filesystem" >&2
+    exit 1
+fi
+
+actual="$(findmnt -no SOURCE --target "$path" || true)"
+if [[ "$actual" != "$expected" ]]; then
+    echo "lab4: $path is mounted from '${actual:-nothing}', expected '$expected'" >&2
+    exit 1
+fi

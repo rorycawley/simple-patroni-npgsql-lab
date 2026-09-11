@@ -1,0 +1,174 @@
+---
+# Every task below that reaches the network is retried. A single timeout against
+# repo.percona.com or an EPEL mirror would otherwise fail the whole run, which is
+# a poor experience for `make all` on a laptop with imperfect connectivity.
+- name: Install repository prerequisites and firewalld
+  ansible.builtin.dnf:
+    name:
+      - curl
+      - dnf-plugins-core
+      - epel-release
+      - firewalld
+      - python3-firewall
+    state: present
+  register: lab4_prereq_packages
+  retries: 5
+  delay: 15
+  until: lab4_prereq_packages is succeeded
+
+- name: Disable Rocky Linux's PostgreSQL module
+  ansible.builtin.command: dnf -y module disable postgresql
+  register: lab4_postgresql_module
+  changed_when: "'Nothing to do' not in lab4_postgresql_module.stdout"
+
+- name: Import Percona's RPM packaging key
+  ansible.builtin.rpm_key:
+    key: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
+    state: present
+  register: lab4_percona_key
+  retries: 5
+  delay: 15
+  until: lab4_percona_key is succeeded
+
+- name: Install Percona's repository management package
+  ansible.builtin.dnf:
+    name: https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+    state: present
+  register: lab4_percona_release
+  retries: 5
+  delay: 15
+  until: lab4_percona_release is succeeded
+
+- name: Read the enabled DNF repositories
+  ansible.builtin.command: dnf repolist --enabled
+  register: lab4_enabled_repos
+  changed_when: false
+
+- name: Enable the CodeReady Builder and EPEL repositories
+  ansible.builtin.command: dnf config-manager --set-enabled {{ item }}
+  loop:
+    - crb
+    - epel
+  when: item not in (lab4_enabled_repos.stdout_lines | map('regex_replace', '\\s.*$', '') | list)
+
+# Defined directly rather than via `percona-release setup ppg18`. That command
+# discovers repositories by scraping the HTML index at the hardcoded, non-
+# overridable http://repo.percona.com and filtering out every https link:
+#
+#   REPOSITORIES=$(curl -s ${URL} | tail -n +28 | grep href | grep -v https | ...)
+#
+# Percona now serves that index over https, so the scrape returns an empty list
+# and setup fails with "Specified repository does not exist", even though the
+# repository is present and serving valid metadata. Pointing dnf at the real
+# location removes the dependency on that scrape entirely.
+- name: Define the Percona PostgreSQL 18 repositories
+  ansible.builtin.yum_repository:
+    name: "ppg-18-release-{{ item }}"
+    description: "Percona Distribution for PostgreSQL 18 - release - {{ item }}"
+    baseurl: "https://repo.percona.com/ppg-18/yum/release/$releasever/RPMS/{{ item }}"
+    gpgcheck: true
+    gpgkey: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
+    enabled: true
+  loop:
+    - $basearch
+    - noarch
+
+- name: Install the Percona PostgreSQL HA node packages
+  ansible.builtin.dnf:
+    name:
+      - percona-postgresql18-server
+      - percona-patroni
+      - percona-pgbackrest
+      - etcd
+      - python3-python-etcd
+    state: present
+  register: lab4_ha_packages
+  retries: 5
+  delay: 15
+  until: lab4_ha_packages is succeeded
+
+- name: Gather installed service facts
+  ansible.builtin.service_facts:
+
+- name: Keep independently managed PostgreSQL and packaged Patroni services disabled
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - postgresql-18
+    - patroni
+  when: item ~ '.service' in ansible_facts.services
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: Set the drop zone to default-deny
+  ansible.posix.firewalld:
+    zone: drop
+    target: DROP
+    state: present
+    permanent: true
+    immediate: false
+  register: lab4_drop_zone_target
+
+- name: Load the permanent drop-zone configuration
+  ansible.builtin.command: firewall-cmd --reload
+  when: lab4_drop_zone_target is changed
+
+# The allow rules must exist before the interfaces move into the drop zone,
+# otherwise this task sequence locks itself out of its own SSH connection.
+- name: Allow Lima's isolated management network to use SSH
+  ansible.posix.firewalld:
+    zone: drop
+    rich_rule: >-
+      rule family="ipv4" source address="{{ lab4_lima_management_cidr }}"
+      port port="22" protocol="tcp" accept
+    state: enabled
+    permanent: true
+    immediate: true
+
+- name: Allow cluster nodes to communicate with etcd, PostgreSQL, and Patroni
+  ansible.posix.firewalld:
+    zone: drop
+    rich_rule: >-
+      rule family="ipv4" source address="{{ item.0 }}/32"
+      port port="{{ item.1 }}" protocol="tcp" accept
+    state: enabled
+    permanent: true
+    immediate: true
+  with_nested:
+    - "{{ lab4_peer_ips }}"
+    - "{{ lab4_cluster_ports }}"
+
+- name: Allow the explicitly configured application CIDRs to reach PostgreSQL
+  ansible.posix.firewalld:
+    zone: drop
+    rich_rule: >-
+      rule family="ipv4" source address="{{ item }}"
+      port port="5432" protocol="tcp" accept
+    state: enabled
+    permanent: true
+    immediate: true
+  loop: "{{ lab4_postgres_client_cidrs }}"
+
+- name: Assign the VM network interfaces to the drop zone
+  ansible.posix.firewalld:
+    zone: drop
+    interface: "{{ item }}"
+    state: enabled
+    permanent: true
+    immediate: true
+  loop: "{{ lab4_firewall_interfaces }}"
+
+- name: Read the current firewall default zone
+  ansible.builtin.command: firewall-cmd --get-default-zone
+  register: lab4_current_default_zone
+  changed_when: false
+
+- name: Make the drop zone the system default
+  ansible.builtin.command: firewall-cmd --set-default-zone=drop
+  when: lab4_current_default_zone.stdout | trim != 'drop'

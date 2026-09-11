@@ -1,0 +1,12 @@
+[Unit]
+Description=Take an incremental pgBackRest backup
+
+[Timer]
+OnBootSec={{ lab4_backup_incr_on_boot }}
+OnUnitActiveSec={{ lab4_backup_incr_interval }}
+Unit=lab4-backup@incr.service
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,65 @@
+---
+- name: Bootstrap Patroni nodes one at a time
+  hosts: patroni_nodes
+  serial: 1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Enable and start Patroni
+      ansible.builtin.systemd:
+        name: percona-patroni
+        enabled: true
+        state: started
+
+    - name: Wait for PostgreSQL to become healthy on this node
+      ansible.builtin.uri:
+        # The REST API now requires a client certificate, so the probe presents
+        # one. localhost is in the certificate's SAN for exactly this call.
+        url: https://127.0.0.1:8008/health
+        status_code: 200
+        client_cert: "{{ lab4_pki_dir }}/patroni.crt"
+        client_key: "{{ lab4_pki_dir }}/patroni.key"
+        ca_path: "{{ lab4_pki_dir }}/ca.crt"
+      register: lab4_postgres_health
+      retries: 60
+      delay: 2
+      until: lab4_postgres_health.status == 200
+
+    # archive_mode is on from the moment Patroni starts PostgreSQL, so every
+    # archive-push fails until this stanza exists. Creating it here, rather than
+    # at the end of the run, keeps that window to a few seconds per node.
+    # It cannot run any earlier: stanza-create reads pg_control, which does not
+    # exist until Patroni has initialised or cloned the data directory.
+    - name: Create the local pgBackRest stanza without connecting to PostgreSQL
+      ansible.builtin.command: pgbackrest --stanza={{ lab4_cluster_name }} --no-online stanza-create
+      become_user: postgres
+      register: lab4_stanza_create
+      changed_when: false
+
+- name: Reconcile and verify the Patroni distributed configuration
+  hosts: lab4-pg1
+  become: true
+  become_user: postgres
+  gather_facts: false
+  tasks:
+    - name: Apply the desired Patroni distributed configuration
+      ansible.builtin.command: >-
+        patronictl -c /etc/patroni/patroni.yml edit-config {{ lab4_cluster_name }}
+        --apply /etc/patroni/dcs.yml --force
+      register: lab4_patroni_config
+      changed_when: "'Not changed' not in lab4_patroni_config.stdout"
+
+    - name: Wait for all three Patroni members
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml list --format=json
+      register: lab4_patroni_members
+      retries: 30
+      delay: 2
+      until:
+        - (lab4_patroni_members.stdout | from_json | length) == 3
+        - (lab4_patroni_members.stdout | from_json | selectattr('Role', 'equalto', 'Leader') | list | length) == 1
+        # Counted as "not the leader and streaming" rather than by role name.
+        # Patroni renames the standby role according to the replication mode --
+        # it is "Replica" asynchronously but "Quorum Standby" under quorum
+        # commit -- so matching 'Replica' literally would wait forever here.
+        - (lab4_patroni_members.stdout | from_json | rejectattr('Role', 'equalto', 'Leader') | selectattr('State', 'equalto', 'streaming') | list | length) == 2
+      changed_when: false

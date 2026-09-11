@@ -1,0 +1,10 @@
+[Unit]
+Description=Encrypted logical dump (leader only)
+After=network-online.target percona-patroni.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart={{ lab4_backup_bin_dir }}/lab4-dump
