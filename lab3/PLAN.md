@@ -503,6 +503,32 @@ like every other credential, the surviving repository would have been
 permanently unreadable: the one secret whose loss cannot be recovered from,
 lost to a routine rebuild.
 
+### A check that passed on an empty set
+
+Found by Lab 4, not here — which is the point worth recording.
+
+`test_repository` asserts that everything `pgbackrest info` lists is present in
+the bucket. It ran *before* `test_backup`, so on a genuinely fresh build there
+were no backups, and it reported:
+
+```text
+ok: all 0 backup(s) have objects in the bucket
+```
+
+Vacuously true, and the check exists precisely to catch an incomplete repository.
+This lab's recorded "23 of 23 from nothing" included it, and passed only because
+the timers happened to have produced backups on every *other* run — making it
+timing-dependent as well as wrong.
+
+Two fixes: the phase now runs after `test_backup`, so a backup is guaranteed to
+exist, and an empty repository **fails** rather than satisfying the check. The
+banner was re-earned on a fresh rebuild, where the same check now reports three
+backups and confirms the configuration files are in them.
+
+The general lesson is the one this series keeps relearning: **a check that has
+never run against an empty input has not been tested against its own failure
+case.** Three of the four defects found this week were of that shape.
+
 ### Keeping the repository out of `make clean` left its certificate there too
 
 Found the morning after the lab went green, which is the only reason it was

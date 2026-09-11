@@ -14,7 +14,7 @@ It produces two things, and everything here serves one of them.
 
 | Deliverable | What it is | Where it lives | How far along |
 | --- | --- | --- | --- |
-| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 3 of 8 stages built |
+| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 3 of 8 built, 1 in progress |
 | **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 3 drilled, 6 reasoned, 1 stub |
 
 Each stage is a lab: a self-contained cluster that builds from nothing with two
@@ -65,6 +65,7 @@ Pick the row that matches why you opened this.
 | **Decide whether the design is sound** | this file → [`SLA.md`](SLA.md) → [`lab1/README.md`](lab1/README.md) |
 | **Run it yourself** | [Prerequisites](#prerequisites) → [`lab1/README.md`](lab1/README.md) → [`lab1/ansible/README.md`](lab1/ansible/README.md) |
 | **Operate the cluster** | [`RUNBOOKS.md`](RUNBOOKS.md) on its own — it is written to need nothing else |
+| **Recover from something** | [Which recovery do you need?](RUNBOOKS.md#which-recovery-do-you-need) — seven options ordered by cost, and the costly ones are last for a reason |
 | **Understand the backup strategy** | [Backups](#backups-two-instruments-not-two-backup-systems) below → [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) |
 
 ## What the labs prove
@@ -160,7 +161,7 @@ needs that they do not have — the list this proof of concept exists to produce
 | **Fault domains** | Three VMs on one machine | Three independent domains. No single domain may hold two of the three nodes — [`SLA.md`](SLA.md#fault-domains-must-the-nodes-be-on-separate-hypervisors) |
 | **Fencing** | `softdog`, a kernel timer | A hardware or hypervisor watchdog. `softdog` cannot fire during a kernel panic, because the timer that would fire it has stopped too |
 | **Backup repository** | Off-host and encrypted as of Lab 3, but a **single** MinIO | A second repository. One is a single point of failure for every recovery you might ever attempt |
-| **Restore** | Not yet rehearsed — [Lab 4](lab4/README.md) is unbuilt | A restore rehearsed on a schedule, not on the day it is needed |
+| **Restore** | Not yet rehearsed — [Lab 4](lab4/README.md) builds, but has restored nothing | A restore rehearsed on a schedule, not on the day it is needed |
 | **Secrets** | Generated into an uncommitted `.secrets/`; superuser and replication passwords sit in cleartext in `patroni.yml` | A secrets manager, with each workload fetching at start — [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) |
 | **PKI** | A private CA issuing certificates at build time | Issuance, rotation, revocation, and expiry monitoring. Expiry is the one outage that is entirely preventable by watching a number |
 | **Disk encryption keys** | A root-only keyfile on the node itself | KMS, TPM or network-bound unlock. Today a stolen *disk* is safe and a stolen *node* is not |
