@@ -44,3 +44,6 @@ publish/
 # that must OUTLIVE the cluster. Not under .secrets/, because `make clean`
 # deletes that and Lab 4 destroys the cluster while the backups survive.
 .recovery-inputs/
+
+# Rung 6 records what must survive the teardown, across it
+.rung6-state

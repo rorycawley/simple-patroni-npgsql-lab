@@ -1,4 +1,4 @@
-.PHONY: help all check clean minio_start minio_stop minio_status minio_destroy test_minio test_history test_replica test_beside test_table test_rewind test_repository test_backup test_chain test_dump test_encryption test_archive test_runbook test_at_rest test_pki test_in_transit test_identity test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
+.PHONY: help all check clean minio_start minio_stop minio_status minio_destroy test_minio test_history test_replica test_beside test_table test_rewind test_repository test_backup test_chain test_dump test_encryption test_archive test_runbook test_at_rest test_pki test_in_transit test_identity test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms rebuild_prepare rebuild_finish test_total_loss test_total_loss_dry
 
 # `make` on its own prints this help rather than building a cluster, because
 # `all` creates VMs and runs destructive fault injection.
@@ -114,6 +114,34 @@ configure_cluster:
 	  --self-contained true -p:PublishSingleFile=true \
 	  -o ./client/publish/linux-arm64 --nologo
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/site.yml
+
+# Rung 6 only. Prepares fresh machines and STOPS: no bootstrap, because Patroni's
+# default is initdb and that would create a new cluster with a new system
+# identifier -- which a pgBackRest stanza, bound to one database by that
+# identifier, would refuse to recognise. The data arrives by restore instead.
+rebuild_prepare:
+	ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-galaxy collection install -r ./ansible/requirements.yml
+	./scripts/generate-secrets.sh
+	./scripts/generate-pki.sh
+	dotnet publish ./client/Lab4.Client.csproj -c Release -r linux-arm64 \
+	  --self-contained true -p:PublishSingleFile=true \
+	  -o ./client/publish/linux-arm64 --nologo
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/install.yml
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/configure.yml
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/start-etcd.yml
+
+# Reattaches the application once the recovered cluster is serving: create-app
+# resets app_runtime's password to the newly generated one, so the client that
+# died with the old credentials can connect again.
+rebuild_finish:
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/create-app.yml
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/app-client.yml
+
+test_total_loss_dry:
+	./scripts/test-total-loss.sh --dry-run
+
+test_total_loss:
+	./scripts/test-total-loss.sh
 
 verify_cluster:
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ansible-playbook ./ansible/playbooks/verify.yml
