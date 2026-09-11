@@ -64,18 +64,24 @@ the full treatment, including when *not* to use each, is in
 What this lab needs from that argument is only which instrument answers which
 disaster, and where each is proven:
 
-| Situation | Instrument | Proven in |
-| --- | --- | --- |
-| Every node lost | pgBackRest — full restore | [Lab 4](../lab4/README.md) |
-| The cluster must be wound back before a bad change | pgBackRest — PITR to a marker | [Lab 8](../lab8/README.md) |
-| One table mangled, everything else fine | `pg_dump` of that table | [Lab 8](../lab8/README.md) |
-| "Is the data actually readable?" | a `pg_dump` that completes | this lab, AC-4 |
+| Situation | Rung | Instrument | Proven in |
+| --- | --- | --- | --- |
+| Every node lost | 6 | pgBackRest — full restore | [Lab 4](../lab4/README.md) |
+| Rows changed and the old values are unknown | 3 | pgBackRest — restore a copy *beside* production | [Lab 4](../lab4/README.md) |
+| One table mangled, everything else fine | 4 | `pg_dump` of that table | [Lab 4](../lab4/README.md) |
+| The cluster must be wound back before a bad change | 5 | pgBackRest — PITR to a marker | [Lab 4](../lab4/README.md); its cost for a migration in [Lab 8](../lab8/README.md) |
+| "Is the data actually readable?" | — | a `pg_dump` that completes | this lab, AC-4 |
 
-The third row is what justifies the extra machinery. Recovering one dropped table
-from a physical backup means restoring the whole cluster to a point in time and
+The rung numbers are the ladder's, defined once in
+[`RUNBOOKS.md`](../RUNBOOKS.md#which-recovery-do-you-need). The last row is not a
+rung: it is not a recovery at all, but the verification pass this lab performs
+every time it takes a dump.
+
+Rung 4 is what justifies the extra machinery. Recovering one dropped table from a
+physical backup means restoring the whole cluster to a point in time and
 discarding **everything committed since**; a logical dump of that table costs
-nothing else. The fourth is why the dump doubles as a verification pass over the
-same data pgBackRest is copying blind — see
+nothing else. The last row is why the dump doubles as a verification pass over
+the same data pgBackRest is copying blind — see
 [AC-4](#ac-4-is-doing-more-work-than-it-looks).
 
 ## Where each kind of backup is stored
@@ -174,9 +180,9 @@ table bloat. Both are defensible; picking silently is not.
 | ID | Property | Pass condition |
 | --- | --- | --- |
 | AC-1 | A backup history exists, and only the leader creates it | On schedule, a full and subsequent incrementals are taken and appear in `pgbackrest info` **output** — not merely a zero exit status, which `info` returns even for a repository it cannot read. With the timer enabled on all three nodes, exactly one backup is produced per cycle, and after a promotion it is the **new** leader that produces it |
-| AC-2 | The repository outlives any node | Every backup and WAL segment is on MinIO, off all three database hosts. Destroying any node leaves the repository complete |
+| AC-2 | The repository outlives any node | Every backup and WAL segment is on MinIO, off all three database hosts, and every node can reach it. Destroying any node leaves the repository complete — including the cluster's own `postgresql.conf`, `pg_hba.conf` and `pg_ident.conf`, which Patroni keeps inside the data directory and which a restore therefore brings back with the rows |
 | AC-3 | The chain is real, and retention respects it | `pgbackrest verify` passes across the whole repository. Expiring a full under `repo1-retention-full` expires the differentials and incrementals that depend on it, and leaves nothing referenced by `backup.info` that is no longer present |
-| AC-4 | A dump proves the data is *readable*, not merely present | A `pg_dump` of `appdb` completes and reloads into a scratch database |
+| AC-4 | A dump proves the data is *readable*, not merely present | A `pg_dump` of `appdb` completes and reloads into a scratch database — and contains exactly what a single-database dump contains: `appdb`'s objects, and **no roles**, because those are cluster-wide and a real restore needs `pg_dumpall --globals-only` alongside it |
 | AC-5 | **Every** object is encrypted at rest, and every transfer in transit | Nothing under either prefix is readable straight from the bucket: pgBackRest objects need `repo1-cipher-pass`, dumps need the dump passphrase. A plaintext connection to MinIO is refused |
 | AC-6 | Archiving survives a promotion, and the recoverable window is measured | Force a promotion mid-cycle: the new primary continues archiving into the same stanza, the WAL sequence has no gap, and `pgbackrest check` passes. Report how far past the last backup the archive reaches |
 
@@ -216,6 +222,19 @@ Lab 4. It is the cheapest available proof that the dump is **readable**, which i
 the property `pgbackrest verify` cannot give, because verifying checksums
 confirms the bytes are intact and says nothing about whether PostgreSQL can parse
 what they contain.
+
+The scope half exists because **the reload cannot catch the most common
+unpleasant surprise**. It restores into a cluster where `app_runtime` and
+`dumper` already exist, so a dump missing every role looks perfect — right up
+until the same file is restored somewhere they do not, and every `GRANT` in it
+fails. Asserting the dump contains no roles is what makes
+[`pg_dumpall --globals-only`](../WHY_PGBACKREST_AND_PGDUMP.md#the-three-asymmetries-that-catch-people)
+a requirement rather than a footnote.
+
+It also asserts something about `appdb` rather than about the dump: that it holds
+**no large objects**. `dumper`'s `pg_read_all_data` does not cover them, so the
+job works only while that stays true — and an assumption nothing checks is a
+landmine.
 
 ### AC-5 covers both prefixes on purpose
 

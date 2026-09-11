@@ -196,10 +196,16 @@ GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_binary_file(text, bigint, bigint, b
 ```sql
 CREATE ROLE dumper WITH LOGIN PASSWORD :'dumper_pw';
 GRANT CONNECT ON DATABASE appdb TO dumper;
--- pg_read_all_data (PostgreSQL 14+) is the reliable choice: a dump by a role
--- that merely holds SELECT on today's tables silently omits anything it cannot
--- read, producing a backup that restores cleanly and is incomplete.
+-- pg_read_all_data (PostgreSQL 14+) is the reliable choice for relations: a dump
+-- by a role that merely holds SELECT on today's tables silently omits anything
+-- it cannot read, producing a backup that restores cleanly and is incomplete.
 GRANT pg_read_all_data TO dumper;
+
+-- It does NOT cover large objects. Measured: pg_dump as this role fails with
+-- "permission denied for large object" as soon as one exists -- loudly, which is
+-- the one mercy. A database that uses large objects needs the dump to run as
+-- their owner or as a superuser, or each object granted explicitly. Lab 3
+-- asserts appdb has none, so this assumption cannot rot unnoticed.
 
 CREATE ROLE monitoring WITH LOGIN PASSWORD :'monitoring_pw';
 GRANT CONNECT ON DATABASE appdb TO monitoring;

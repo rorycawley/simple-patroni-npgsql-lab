@@ -27,15 +27,72 @@ Every strength and every limitation below comes from that one distinction.
 | it is locked to the PostgreSQL major version | it moves between versions and platforms |
 | it copies corruption faithfully | it cannot copy corruption — it fails instead |
 
-## What each one actually produces
+## What each one actually contains
 
-**pgBackRest** maintains a *repository*: full, differential and incremental
-backup sets, a continuous archive of WAL segments, and the manifests that tie
-them together. It is a structured store that pgBackRest manages itself. You do
-not read it by hand, and you do not put your own files in it.
+The distinction above is only useful if you know what each one *has in it*. Both
+lists below were checked against this cluster rather than recited, because
+several entries surprise people — and two of them are the difference between a
+restore that works and one that does not.
 
-**`pg_dump`** produces *one file per run*, containing the schema and data of **one
-database** as either SQL text or a portable archive.
+### pgBackRest: the whole cluster, byte for byte
+
+| In the backup | Not in the backup |
+| --- | --- |
+| **Every database** — measured here as `template0`, `template1`, `postgres` and `appdb`. It does not know what a database *is*; it copies files | Anything outside the data directory: TLS keys, LUKS keys, the OS, and any tablespace on another path |
+| Every table, index, sequence and TOAST relation | **Unlogged table data.** Recovery truncates unlogged relations, so they come back **empty** |
+| Large objects, always — they live in a system catalogue, which is just more files | Temporary files and unlogged-relation init forks |
+| **Roles, passwords and tablespace definitions** — cluster-wide catalogues under `global/` | — |
+| **The server configuration**: `postgresql.conf`, `pg_hba.conf`, `pg_ident.conf`, `postgresql.auto.conf`. Measured — Patroni keeps them inside `PGDATA`, so a restore brings the cluster's own rules back with it | — |
+| The continuous WAL archive, which is what makes any of it point-in-time | — |
+
+**Format.** A repository pgBackRest manages itself: full, differential and
+incremental backup sets, compressed (gzip here), encrypted (`aes-256-cbc`), with
+manifests tying them together. It is **not** a tar file you can unpack. Reading
+it needs pgBackRest *and* `repo1-cipher-pass`, and nothing else will do.
+
+**Granularity: the whole cluster, and only the whole cluster.** There is no
+"restore one table" — that is the entire reason the other instrument exists.
+
+### `pg_dump`: one database, read through SQL
+
+| In the dump | Not in the dump |
+| --- | --- |
+| **One database** — its schema and its data | **Every other database.** A dump of `appdb` knows nothing about `postgres` |
+| **Unlogged table data** — measured: all 50 rows. It reads through the executor, so it captures what a physical backup cannot | **Roles and passwords.** Measured: zero `CREATE ROLE` statements. They are cluster-wide — `pg_dumpall --globals-only` |
+| Large objects, **when dumping the whole database** | Large objects in a **targeted** dump. Measured: `-t lo_probe` yielded **0**; adding `-b` yielded **2** |
+| Anything you select: a schema, a table, data only, schema only | Tablespace definitions and server configuration |
+
+**Format.** Here, `--format=custom`: compressed, and the only format that
+supports *selective* restore — `pg_restore` can pull one table out of it, which
+plain SQL text cannot. It is then encrypted with `openssl aes-256-cbc` before
+upload, because it lands outside the pgBackRest repository and
+`repo1-cipher-pass` does not reach it.
+
+**Granularity: anything down to a single table.**
+
+### The three asymmetries that catch people
+
+| | pgBackRest | `pg_dump` |
+| --- | --- | --- |
+| **Unlogged table data** | **Lost** — truncated on recovery | **Captured** |
+| **Roles and passwords** | Included | **Absent** — restore into a cluster without them and every `GRANT` fails |
+| **Large objects** | Always included | Only with the whole database, **or** `-t` plus `-b` |
+
+The second is the classic unpleasant surprise: a dump that restores cleanly into
+a fresh cluster and then denies the application access to everything, because the
+roles its grants refer to were never in the file.
+
+The third matters most for exactly the job the dump exists to do. Recovering one
+mangled table is a **targeted** dump — and a targeted dump silently leaves large
+objects behind unless you ask for them.
+
+> **A caveat specific to this cluster.** The dump job runs as `dumper`, whose
+> `pg_read_all_data` covers tables, views and sequences — and **not** large
+> objects. Measured: `pg_dump` as `dumper` fails with *permission denied for
+> large object* the moment one exists. `appdb` has none, and
+> [Lab 3](lab3/README.md) asserts that it has none, so the assumption cannot rot
+> silently. A database that uses them needs the dump to run as its owner or as a
+> superuser instead.
 
 ## The kinds of backup
 
@@ -184,6 +241,13 @@ verification, not recency.
 **Is a backup that has never been restored a backup?**
 No. It is a hypothesis. That is why restoring is
 [its own lab](lab4/README.md) rather than a footnote to taking backups.
+
+**Do I have to restore *over* production to use a backup?**
+No, and assuming so is what makes people rewind a whole cluster to recover one
+table. A copy restored *beside* production recovers values while losing nothing
+and stopping nothing. It is the fourth row of
+[the recovery ladder](RUNBOOKS.md#which-recovery-do-you-need), and usually the
+right answer.
 
 ## Before a manual change, do you need either?
 

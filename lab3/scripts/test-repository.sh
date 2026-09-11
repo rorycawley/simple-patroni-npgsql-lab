@@ -65,6 +65,26 @@ done <<< "$labels"
 (( missing == 0 )) && pass "all $(grep -c . <<< "$labels") backup(s) have objects in the bucket"
 
 echo
+echo "=== The physical backup carries the cluster's own configuration ==="
+# Patroni keeps postgresql.conf and pg_hba.conf inside PGDATA, so they are backed
+# up with the data. That is what lets a restore bring back a cluster's rules and
+# not just its rows -- and Lab 4's recovery depends on it, so it is asserted here
+# rather than assumed there.
+full="$(jq -r '[.[0].backup[] | select(.type == "full") | .label] | last' <<< "$info")"
+if [[ -z "$full" || "$full" == null ]]; then
+  fail "no full backup to inspect"
+else
+  for conf in postgresql.conf pg_hba.conf pg_ident.conf; do
+    if on "$node" sudo -u postgres pgbackrest --stanza="$STANZA" \
+         repo-ls "backup/$STANZA/$full/pg_data/$conf" >/dev/null 2>&1; then
+      pass "$conf is in the backup"
+    else
+      fail "$conf is NOT in the backup; a restore would not bring the cluster's rules back"
+    fi
+  done
+fi
+
+echo
 echo "=== No node is still writing backups to its own disk ==="
 # The local directory survives from before the repository moved, so the question
 # is not whether it is empty -- it is whether anything NEW lands there. A node

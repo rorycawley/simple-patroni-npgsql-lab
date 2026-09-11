@@ -133,6 +133,40 @@ else
 fi
 
 echo
+echo "=== The dump's scope is what the documentation claims ==="
+# Both of these are stated in WHY_PGBACKREST_AND_PGDUMP.md. Neither was checked,
+# and the reload above cannot catch either: it restores into a cluster where the
+# roles already exist, so a dump missing them looks perfect.
+sql_text="$(on "$leader" sudo -u postgres "$PGBIN/pg_restore" -f - /tmp/lab3-dump-probe 2>/dev/null)"
+
+roles="$(grep -c '^CREATE ROLE' <<< "$sql_text" || true)"
+(( roles == 0 )) \
+  && pass "no roles in the dump: they are cluster-wide, and a restore needs pg_dumpall --globals-only" \
+  || fail "the dump contains $roles CREATE ROLE statements, which contradicts what the docs claim"
+
+# It should carry appdb's own objects and nothing from another database.
+if grep -q 'public.ha_probe' <<< "$sql_text"; then
+  pass "the dump carries appdb's tables"
+else
+  fail "the dump does not contain appdb's tables"
+fi
+
+echo
+echo "=== The assumption the dumper role rests on still holds ==="
+# pg_read_all_data covers tables, views and sequences -- and NOT large objects.
+# Measured: pg_dump as dumper fails with "permission denied for large object"
+# the moment one exists. appdb has none, so the job works; but that is an
+# assumption about the schema, and an assumption nothing checks is a landmine.
+# This turns it into a check that fires the day someone stores a blob.
+lo_count="$(on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc \
+  "select count(*) from pg_largeobject_metadata")"
+if [[ "$lo_count" == "0" ]]; then
+  pass "appdb holds no large objects, which is what lets dumper read all of it"
+else
+  fail "appdb holds $lo_count large object(s): dumper cannot read them, and this dump is incomplete or failing. The job must run as the owner or a superuser"
+fi
+
+echo
 echo "=== Old dumps are expired by the job that wrote them ==="
 count="$(printf '%s\n' "$keys" | grep -c . || true)"
 keep="$(on "$leader" sudo sed -n 's/^readonly KEEP=//p' "$BIN/lab3-dump")"
