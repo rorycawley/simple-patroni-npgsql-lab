@@ -22,6 +22,7 @@ readonly STANZA=lab4
 readonly BIN=/usr/local/lib/lab4
 readonly PATRONI_CONFIG=/etc/patroni/patroni.yml
 readonly RECOVERY_INPUTS="$LAB_DIR/.recovery-inputs/repo.yml"
+readonly PASSFILE=/etc/lab4/dump.pass
 
 failures=0
 pass() { echo "  ok: $1"; }
@@ -71,19 +72,39 @@ else
     fail "unexpected first bytes for the dump: ${head_hex:-<none>}"
   fi
 
-  # Decrypting with the WRONG passphrase must fail. The repository passphrase is
-  # the most convincing wrong key available: if it worked, the two stores would
-  # share a secret and losing one would lose both.
+  # The repository passphrase must not open the dump: if it did, the two stores
+  # would share a secret and losing one would lose both.
+  #
+  # The property is about the PLAINTEXT, not about openssl's exit status, and the
+  # difference is not academic. With -pbkdf2 a wrong passphrase still produces
+  # output; openssl only errors if the final block's PKCS#7 padding fails to
+  # validate, which by chance it survives roughly 1 time in 256. This check used
+  # to test the exit code and duly failed a correctly encrypted dump -- garbage
+  # bytes '333 240 e 250' that openssl was happy to emit.
+  #
+  # So decrypt and look: a dump begins with the magic PGDMP. Anything else is not
+  # the dump, whatever openssl thought of it.
   repo_pass="$(sed -n 's/^repo_cipher_pass: "\(.*\)"$/\1/p' "$RECOVERY_INPUTS")"
-  if on "$node" sudo bash -c \
-      "$BIN/lab4-s3 cat '$newest_dump' > /tmp/lab4-enc-probe 2>/dev/null &&
-       openssl enc -d -aes-256-cbc -pbkdf2 -in /tmp/lab4-enc-probe -out /dev/null \
-         -pass pass:'$repo_pass'" >/dev/null 2>&1; then
-    fail "the dump decrypted with the REPOSITORY passphrase; the two keys are the same"
-  else
-    pass "the dump does not open with the repository passphrase: separate keys"
-  fi
-  on "$node" sudo rm -f /tmp/lab4-enc-probe >/dev/null 2>&1
+  wrong_head="$(on "$node" sudo bash -c \
+    "$BIN/lab4-s3 cat '$newest_dump' > /tmp/lab4-enc-probe 2>/dev/null
+     openssl enc -d -aes-256-cbc -pbkdf2 -in /tmp/lab4-enc-probe \
+       -out /tmp/lab4-enc-probe.out -pass pass:'$repo_pass' 2>/dev/null
+     head -c 5 /tmp/lab4-enc-probe.out 2>/dev/null")"
+  [[ "$wrong_head" == "PGDMP" ]] \
+    && fail "the dump decrypted with the REPOSITORY passphrase; the two keys are the same" \
+    || pass "the repository passphrase does not yield the dump: separate keys"
+
+  # The positive half, which the old check never made: the dump passphrase must
+  # actually open it. "Nothing else decrypts it" is only half a claim if the
+  # right key does not either.
+  right_head="$(on "$node" sudo bash -c \
+    "openssl enc -d -aes-256-cbc -pbkdf2 -in /tmp/lab4-enc-probe \
+       -out /tmp/lab4-enc-probe.out -pass file:$PASSFILE 2>/dev/null
+     head -c 5 /tmp/lab4-enc-probe.out 2>/dev/null")"
+  [[ "$right_head" == "PGDMP" ]] \
+    && pass "and the dump passphrase does open it, to a real PGDMP archive" \
+    || fail "the dump passphrase does not open the dump: it is unreadable"
+  on "$node" sudo rm -f /tmp/lab4-enc-probe /tmp/lab4-enc-probe.out >/dev/null 2>&1
 fi
 
 dump_pass="$(sed -n 's/^dump_cipher_pass: "\(.*\)"$/\1/p' "$RECOVERY_INPUTS")"

@@ -174,11 +174,25 @@ done
 # ---------------------------------------------------------------------------
 echo
 echo "=== Rebuild the machines, with a NEW CA and NEW passwords ==="
-"$SCRIPT_DIR/minio.sh" start >/dev/null 2>&1
 make -C "$LAB_DIR" create_vms >/dev/null 2>&1
 make -C "$LAB_DIR" rebuild_prepare >/dev/null 2>&1 \
   && pass "fresh machines prepared: packages, encrypted volumes, TLS, etcd" \
   || fail "the rebuild did not complete"
+
+# MinIO starts only NOW, and the order is not arbitrary. The teardown deleted
+# .secrets/pki, so the object store has no server certificate until
+# rebuild_prepare reissues one from the new CA. Started any earlier it comes up
+# without TLS or not at all, and the restore fails with a message that says
+# nothing about certificates:
+#
+#   WARN: [HostConnectError] unable to connect to '192.168.105.1:9200'
+#   ERROR: [075]: no backup set found to restore
+#
+# "No backup set found" against a repository that is completely intact.
+"$SCRIPT_DIR/minio.sh" start >/dev/null 2>&1
+on "${VM_NAMES[0]}" sudo -u postgres pgbackrest --stanza="$STANZA" info >/dev/null 2>&1 \
+  && pass "the repository answers from the rebuilt machines, over the new CA" \
+  || { fail "the rebuilt nodes cannot reach the repository; the restore cannot start"; exit 1; }
 
 ca_after="$(openssl x509 -in "$LAB_DIR/.secrets/pki/ca.crt" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
 # shellcheck disable=SC1090
@@ -240,14 +254,40 @@ super_pw="$(secret postgres_superuser_password)"
 repl_pw="$(secret postgres_replication_password)"
 [[ -n "$super_pw" && -n "$repl_pw" ]] \
   || { fail "could not read the newly generated passwords"; exit 1; }
-on "$first" sudo -u postgres "$PGBIN/psql" --no-psqlrc --set=ON_ERROR_STOP=1 -Atc \
-  "alter role postgres with password '$super_pw'" </dev/null >/dev/null 2>&1 \
+
+# A statement timeout, because the failure here is a HANG rather than an error.
+psql1() {
+  on "$first" sudo -u postgres env PGOPTIONS='-c statement_timeout=30s' \
+    "$PGBIN/psql" --no-psqlrc --set=ON_ERROR_STOP=1 -Atc "$1" </dev/null
+}
+
+# The reset path deadlocks against strict synchronous replication, and the two
+# halves of the deadlock are each individually correct:
+#
+#   synchronous_standby_names comes back FROM THE BACKUP, naming standbys that
+#   do not exist yet, so under synchronous_mode_strict every write blocks
+#   an ALTER ROLE is a write, so resetting the replication password blocks
+#   a standby cannot attach until that password is reset
+#
+# Measured as `wait_event = SyncRep` on the ALTER ROLE, waiting indefinitely.
+# Suspending sync commit for the length of the reset is what breaks it. The
+# setting is RESET rather than left cleared: postgresql.auto.conf overrides
+# postgresql.conf, so a value left here would quietly outrank Patroni's own
+# management of it for the life of the cluster.
+psql1 "alter system set synchronous_standby_names = ''" >/dev/null 2>&1
+psql1 "select pg_reload_conf()" >/dev/null 2>&1
+pass "synchronous commit suspended for the reset: no standby exists to confirm it yet"
+
+[[ "$(psql1 "alter role postgres with password '$super_pw'" 2>&1)" == "ALTER ROLE" ]] \
   && pass "the superuser password now matches the rebuilt cluster's configuration" \
   || fail "could not reset the superuser password"
-on "$first" sudo -u postgres "$PGBIN/psql" --no-psqlrc --set=ON_ERROR_STOP=1 -Atc \
-  "alter role replicator with password '$repl_pw'" </dev/null >/dev/null 2>&1 \
+[[ "$(psql1 "alter role replicator with password '$repl_pw'" 2>&1)" == "ALTER ROLE" ]] \
   && pass "the replication password matches, so standbys will be able to attach" \
   || fail "could not reset the replication password"
+
+psql1 "alter system reset synchronous_standby_names" >/dev/null 2>&1
+psql1 "select pg_reload_conf()" >/dev/null 2>&1
+pass "synchronous commit handed back to Patroni, which owns that setting"
 
 # ---------------------------------------------------------------------------
 echo
@@ -309,14 +349,23 @@ echo "=== AC-6: it is a cluster, not a data directory ==="
 on "$new_leader" sudo -u postgres pgbackrest --stanza="$STANZA" check >/dev/null 2>&1 \
   && pass "archiving works again, into the same stanza it was recovered from" \
   || fail "pgbackrest check fails on the recovered cluster"
-armed=0
+# Patroni arms the watchdog when it becomes LEADER, so "every node logged it" is
+# the wrong question -- a node that has never been promoted never will have, and
+# the first version of this check failed a perfectly healthy cluster on it. What
+# has to be true is that every node COULD arm it, and that the one currently
+# holding the leader lock HAS.
+usable=0
 for vm in "${VM_NAMES[@]}"; do
-  on "$vm" sudo journalctl -u percona-patroni --no-pager 2>/dev/null \
-    | grep -qi "watchdog" && armed=$((armed + 1))
+  on "$vm" sudo bash -c 'test -c /dev/watchdog && test "$(stat -c %U /dev/watchdog)" = postgres' \
+    && usable=$((usable + 1))
 done
-(( armed == 3 )) \
-  && pass "the watchdog is armed on all three nodes" \
-  || fail "only $armed node(s) report a watchdog; fencing is not fully restored"
+(( usable == 3 )) \
+  && pass "/dev/watchdog is present and owned by postgres on all three nodes" \
+  || fail "only $usable node(s) could arm a watchdog; fencing is not fully restored"
+on "$new_leader" sudo journalctl -u percona-patroni --no-pager 2>/dev/null \
+  | grep -qi "watchdog activated" \
+  && pass "the leader has the watchdog armed" \
+  || fail "the leader did not arm its watchdog; a frozen Patroni would not be fenced"
 
 echo
 echo "  rung 6 cost: ${restore_elapsed}s restore + ${replay_elapsed}s replay,"
