@@ -57,10 +57,14 @@ fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
 secret() { sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS" 2>/dev/null; }
 
+# `timeout` inside the guest, because patronictl BLOCKS on an unreachable DCS
+# rather than erroring. With etcd down this call sat for over five minutes, and a
+# retry loop built on it never completes -- the run neither passes nor fails, it
+# just stops producing output. A bounded call turns that into a visible failure.
 patroni_json() {
   local out vm
   for vm in "${VM_NAMES[@]}"; do
-    if out="$(on "$vm" sudo -u postgres patronictl -c "$PATRONI_CONFIG" list --format=json 2>/dev/null)"; then
+    if out="$(on "$vm" sudo -u postgres timeout 20 patronictl -c "$PATRONI_CONFIG" list --format=json 2>/dev/null)"; then
       [[ -n "$out" ]] && { printf '%s\n' "$out"; return 0; }
     fi
   done
@@ -175,9 +179,39 @@ done
 echo
 echo "=== Rebuild the machines, with a NEW CA and NEW passwords ==="
 make -C "$LAB_DIR" create_vms >/dev/null 2>&1
-make -C "$LAB_DIR" rebuild_prepare >/dev/null 2>&1 \
-  && pass "fresh machines prepared: packages, encrypted volumes, TLS, etcd" \
-  || fail "the rebuild did not complete"
+# FATAL, not recorded and stepped over. An earlier version treated this as one
+# more failed assertion and carried on: etcd had not started, so the next twelve
+# minutes printed "ok" for a restore, a promotion and a credential reset that
+# were all genuinely fine, and then hung indefinitely on the first call that
+# needed the DCS. A precondition that fails has to stop the run, or the output
+# describes a recovery that cannot finish.
+prepare_log="$LAB_DIR/.rung6-prepare.log"
+if make -C "$LAB_DIR" rebuild_prepare > "$prepare_log" 2>&1; then
+  pass "fresh machines prepared: packages, encrypted volumes, TLS, etcd"
+else
+  # etcd's first bootstrap on cold VMs is not reliably green, and start-etcd.yml
+  # already carries a synchronised re-form for it. Run alone against warm
+  # machines the same playbook succeeds every time, so what follows captures WHY
+  # it did not, rather than retrying past it silently.
+  echo "  the first prepare failed; capturing why before retrying" >&2
+  echo "  --- what Ansible reported ---" >&2
+  grep -iE "^(fatal|failed|ERROR)|msg\":|unreachable" "$prepare_log" 2>/dev/null \
+    | tail -8 | cut -c1-200 | sed 's/^/    /' >&2
+  for vm in "${VM_NAMES[@]}"; do
+    echo "  --- ${vm#$VM_PREFIX} ---" >&2
+    on "$vm" sudo bash -c \
+      'systemctl is-active etcd; systemctl --no-pager -l status etcd 2>&1 | sed -n "1,6p";
+       echo "journal:"; journalctl -u etcd --no-pager -n 8 2>&1 | tail -8;
+       echo "member dir: $(ls -A /var/lib/etcd/lab4 2>/dev/null | wc -l) entries";
+       findmnt -n /var/lib/etcd || echo "/var/lib/etcd NOT MOUNTED"' 2>&1 | sed 's/^/    /' >&2
+  done
+  if make -C "$LAB_DIR" rebuild_prepare >/dev/null 2>&1; then
+    fail "the rebuild needed a SECOND attempt: etcd did not bootstrap first time"
+  else
+    fail "the rebuild did not complete on two attempts; nothing below it can be trusted"
+    exit 1
+  fi
+fi
 
 # MinIO starts only NOW, and the order is not arbitrary. The teardown deleted
 # .secrets/pki, so the object store has no server certificate until
@@ -193,6 +227,19 @@ make -C "$LAB_DIR" rebuild_prepare >/dev/null 2>&1 \
 on "${VM_NAMES[0]}" sudo -u postgres pgbackrest --stanza="$STANZA" info >/dev/null 2>&1 \
   && pass "the repository answers from the rebuilt machines, over the new CA" \
   || { fail "the rebuilt nodes cannot reach the repository; the restore cannot start"; exit 1; }
+
+# Checked here, where it is cheap to say so. Patroni cannot take a leader lock
+# without a DCS, and the etcd bootstrap on freshly booted VMs is not always
+# first-time green -- start-etcd.yml carries its own re-bootstrap for that. The
+# failure this guards against is not etcd being slow, it is the run continuing
+# past a dead DCS and reporting a recovery it cannot possibly complete.
+etcd_up=0
+for vm in "${VM_NAMES[@]}"; do
+  [[ "$(on "$vm" systemctl is-active etcd)" == "active" ]] && etcd_up=$((etcd_up + 1))
+done
+(( etcd_up == 3 )) \
+  && pass "etcd is running on all three nodes: there is a DCS to hand the cluster to" \
+  || { fail "etcd is up on only $etcd_up/3 nodes; Patroni could not take a leader lock"; exit 1; }
 
 ca_after="$(openssl x509 -in "$LAB_DIR/.secrets/pki/ca.crt" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
 # shellcheck disable=SC1090
@@ -214,6 +261,14 @@ done
 echo
 echo "=== Restore onto one node, from the repository alone ==="
 first="${VM_NAMES[0]}"
+# The timers are live on the rebuilt machines and fire every couple of minutes.
+# The leader gate should keep them idle while Patroni is stopped, but a backup
+# that did start would hold the stanza lock and fail the restore underneath it.
+# Quiesced explicitly rather than relying on the gate.
+for vm in "${VM_NAMES[@]}"; do
+  on "$vm" sudo systemctl stop lab4-backup-full.timer lab4-backup-incr.timer lab4-dump.timer \
+    >/dev/null 2>&1
+done
 restore_start="$SECONDS"
 on "$first" sudo -u postgres pgbackrest --stanza="$STANZA" --log-level-console=warn restore >/dev/null 2>&1
 rc=$?
@@ -325,6 +380,21 @@ total_elapsed=$((SECONDS - destroy_start))
 make -C "$LAB_DIR" rebuild_finish >/dev/null 2>&1 \
   && pass "the application role and client were reissued against the new credentials" \
   || fail "the application could not be reattached"
+
+# Scheduled backups resume. A recovered cluster whose timers stayed stopped is
+# one incident away from having nothing to recover from next time.
+for vm in "${VM_NAMES[@]}"; do
+  on "$vm" sudo systemctl start lab4-backup-full.timer lab4-backup-incr.timer lab4-dump.timer \
+    >/dev/null 2>&1
+done
+running_timers=0
+for vm in "${VM_NAMES[@]}"; do
+  [[ "$(on "$vm" systemctl is-active lab4-backup-incr.timer)" == "active" ]] \
+    && running_timers=$((running_timers + 1))
+done
+(( running_timers == 3 )) \
+  && pass "scheduled backups are running again on all three nodes" \
+  || fail "only $running_timers node(s) have their backup timers running"
 
 # ---------------------------------------------------------------------------
 echo
