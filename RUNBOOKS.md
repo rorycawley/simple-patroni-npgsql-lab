@@ -671,7 +671,7 @@ sudo -u postgres pgbackrest --stanza=<stanza> --delta \
 
 # Finish recovery under pg_ctl and watch it promote. Then LEAVE IT RUNNING.
 sudo -u postgres /usr/pgsql-18/bin/pg_ctl -D /var/lib/pgsql/data -w -t 300 start
-sudo -u postgres psql -Atc 'select pg_is_in_recovery()'          # wait for 'f'
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc "select pg_is_in_recovery()"  # wait for 'f'
 
 # Hand the RUNNING primary back. Patroni adopts it and takes the leader lock.
 sudo systemctl start percona-patroni
