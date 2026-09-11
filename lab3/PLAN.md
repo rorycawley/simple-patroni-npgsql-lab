@@ -464,6 +464,79 @@ than SELECT grants — because a dump by a role holding SELECT on today's tables
 silently omits anything it cannot read, producing a backup that restores cleanly
 and is incomplete.
 
+### A repository that outlives the cluster cannot be reused by a new one
+
+The sharpest finding in this lab, and it is not a defect — it is two correct
+decisions meeting.
+
+The repository deliberately survives `make clean`, because Lab 4's premise is
+the cluster dying while the backups live. But a pgBackRest stanza is bound to a
+*database*, identified by its system id. Rebuild the lab and PostgreSQL is
+initialised fresh, so `stanza-create` refuses:
+
+```text
+ERROR: [028]: backup and archive info files exist but do not match the database
+       HINT: is this the correct stanza?
+```
+
+pgBackRest is right to refuse. Adopting the existing stanza would put two
+unrelated databases' histories in one place, which is how a restore quietly
+produces the wrong data — far worse than failing.
+
+The consequence is real and was not anticipated: **`make all` after a rebuild
+cannot succeed while the previous repository exists.** There are exactly two
+honest ways out, and they are the two this series already separates:
+
+| You want | Do |
+| --- | --- |
+| A fresh lab; the old backups are of no further interest | `make minio_destroy`, then `make all` |
+| The data back | Restore from the repository — which is [Lab 4](../lab4/README.md), and is not built |
+
+That is not a limitation to design around. It is the actual choice anyone faces
+when a cluster is gone and its backups are not, and discovering it here rather
+than in Lab 4 is the useful outcome.
+
+One thing it did validate. The rebuild regenerated `.secrets/` — new CA, new
+passwords — and both `repo_cipher_pass` and `dump_cipher_pass` **survived in
+`.recovery-inputs/`**, exactly as P2 intended. Had they been born in `.secrets/`
+like every other credential, the surviving repository would have been
+permanently unreadable: the one secret whose loss cannot be recovered from,
+lost to a routine rebuild.
+
+### Keeping the repository out of `make clean` left its certificate there too
+
+Found the morning after the lab went green, which is the only reason it was
+found at all.
+
+P1 deliberately put the object store in `.minio/`, outside `.secrets/`, so
+`make clean` cannot destroy the backups — [Lab 4](../lab4/README.md)'s whole
+premise is the cluster dying while the repository lives. That decision is right.
+Putting MinIO's **certificate** in the same directory was not: a certificate is
+not repository data.
+
+Rebuild the lab and the CA is regenerated, `minio.crt` is reissued — and a MinIO
+process that is already running keeps serving the superseded one, because
+`minio.sh start` returned early on "already running" and never looked. Every
+node then reports:
+
+```text
+unable to verify certificate presented by 192.168.105.1:9100:
+    [20] unable to get local issuer certificate
+```
+
+Which reads as **the repository is broken**. It was not: all 2791 objects were
+present and the CA on the nodes matched the CA on the control machine exactly.
+Only the certificate in between was stale. The same shape as every other finding
+in this lab — a confident wrong answer pointing at the wrong component.
+
+Two changes, because self-healing on its own teaches nobody:
+
+- `minio.sh start` compares the served certificate against the current PKI and
+  restarts MinIO when they differ, so `make all` repairs it.
+- `test_minio` asserts that the served fingerprint **is** the issued one. The
+  existing TLS checks could not catch this: they verify the certificate is
+  valid and trusted, which it was — for a CA that no longer existed.
+
 ### The application host is not tested against the object store
 
 `test_minio` originally checked all four VMs and failed on `lab3-app1`, whose CA

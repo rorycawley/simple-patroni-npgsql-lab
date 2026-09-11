@@ -80,6 +80,21 @@ for vm in "${VM_NAMES[@]}"; do
 done
 
 echo
+echo "=== The certificate it serves is the one the PKI issued ==="
+# Not redundant with the TLS checks above: those would still pass if the whole
+# lab were rebuilt against a NEW CA while MinIO kept serving a certificate from
+# the old one -- the nodes would simply all fail, which looks like a broken
+# repository rather than a stale certificate. Assert identity, not just validity.
+serving="$(openssl s_client -connect "${ENDPOINT#https://}" </dev/null 2>/dev/null \
+  | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
+issued="$(openssl x509 -noout -fingerprint -sha256 -in "$PKI_DIR/minio.crt" 2>/dev/null | sed 's/.*=//')"
+if [[ -n "$serving" && "$serving" == "$issued" ]]; then
+  pass "the served certificate matches the current PKI"
+else
+  fail "MinIO is serving a superseded certificate (${serving:0:17}… vs ${issued:0:17}…)"
+fi
+
+echo
 echo "=== The node credential works, and is scoped to one bucket ==="
 export MC_CONFIG_DIR="$MC_DIR"
 access_key="$(secret minio_backup_access_key)"

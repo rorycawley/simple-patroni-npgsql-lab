@@ -79,8 +79,35 @@ running() {
 
 mc_() { MC_CONFIG_DIR="$MC_DIR" mc --quiet --no-color "$@"; }
 
+# Is the certificate MinIO is serving still the one the PKI issued?
+#
+# This matters because the repository deliberately lives outside .secrets/, so
+# `make clean` cannot destroy the backups -- but the certificate was living
+# there too, and a certificate is not repository data. Rebuild the lab and the
+# CA is regenerated, minio.crt is reissued, and a MinIO that is already running
+# keeps serving the old one. Every node then fails with
+#
+#     unable to verify certificate presented by <endpoint>
+#
+# which reads as "the repository is broken" when the repository is perfectly
+# intact. Observed exactly once, which was enough.
+cert_is_current() {
+  [[ -f "$CERTS_DIR/public.crt" && -f "$PKI_DIR/minio.crt" ]] || return 1
+  local serving issued
+  serving="$(openssl x509 -noout -fingerprint -sha256 -in "$CERTS_DIR/public.crt" 2>/dev/null)"
+  issued="$(openssl x509 -noout -fingerprint -sha256 -in "$PKI_DIR/minio.crt" 2>/dev/null)"
+  [[ -n "$serving" && "$serving" == "$issued" ]]
+}
+
 do_start() {
-  if running; then echo "MinIO is already running at $(endpoint)"; return 0; fi
+  if running; then
+    if cert_is_current; then
+      echo "MinIO is already running at $(endpoint)"
+      return 0
+    fi
+    echo "MinIO is running with a superseded certificate; restarting it"
+    do_stop >/dev/null
+  fi
 
   [[ -f "$CLUSTER_SECRETS" ]] || "$SCRIPT_DIR/generate-secrets.sh" >/dev/null
   [[ -f "$PKI_DIR/minio.crt" ]] || "$SCRIPT_DIR/generate-pki.sh" >/dev/null
