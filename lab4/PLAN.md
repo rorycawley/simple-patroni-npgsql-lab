@@ -192,7 +192,31 @@ assert from the logs that the repository was the source.
 backup — which is the point: a cluster that can only rebuild standbys *from the
 primary* degrades under exactly the load that caused the failure.
 
-### P3 — Rung 3: restore beside a cluster that keeps serving
+### P3 — Rung 3: restore beside a cluster that keeps serving — **done**
+
+> `make test_beside` passes, repeatably. Twenty rows are overwritten so their old
+> values exist nowhere in production; a copy is restored onto the encrypted
+> restore volume targeting a marker before the damage, started on port 5433 with
+> **archiving off**, read, and production repaired forward from it.
+>
+> **Rung 3 cost: 2s to a usable copy, 0 rows lost, 0 downtime.** A client
+> committed unrelated rows throughout and recorded **0 failures**; every row it
+> wrote during the restore is still there. `check` and `verify` both pass
+> afterwards, so R3 did not happen: the promoted copy archived nothing into the
+> production stanza.
+>
+> The assertion that makes it a restore rather than a lucky read is that
+> production still showed all twenty as `CORRUPTED` while the copy held the
+> originals. The values could only have come from the repository.
+>
+> Three harness bugs first, and two were repeats of failures already seen today:
+>
+> | Bug | Shape |
+> | --- | --- |
+> | The client's SQL escaped into `"rung3-"` — a double-quoted **identifier**, not a string literal — so every insert failed | Deep quoting through `bash -c`. Fixed by writing the client to a file |
+> | Cleanup deleted the client's files but never killed the client, so the **previous run's** process appended 48 failures into this run's counters | The same stale-evidence shape as P2's journal |
+> | The repair loop stopped after one row: `limactl shell` reads stdin and swallowed the here-string being iterated | The same stdin-eating bug that killed the restore probe during planning |
+
 
 **What.** The rung this lab was extended to cover, and the one an operator
 reaches for most.

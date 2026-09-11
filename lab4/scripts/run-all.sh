@@ -127,6 +127,7 @@ main() {
   run_phase "A history worth restoring from: a base backup and a marker" test_history optional
   run_phase "Repository: off-host, reachable from every node, complete" test_repository optional
   run_phase "Rung 1: a node is rebuilt from the repository, not the primary" test_replica optional
+  run_phase "Rung 3: a copy restored beside a cluster that keeps serving" test_beside optional
   run_phase "Backup chain: it verifies, and retention expires dependents" test_chain optional
   run_phase "Logical dumps: encrypted, readable, and they reload" test_dump optional
   run_phase "Encryption: every object needs its passphrase, both prefixes" test_encryption optional
