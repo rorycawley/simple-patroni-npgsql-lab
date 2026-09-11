@@ -32,7 +32,7 @@ point of the exercise.
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | **Built and verified** |
 | [2](lab2/README.md) | Every Lab 1 guarantee, now on LUKS2 volumes — PostgreSQL and etcd on separate devices — with TLS on every channel, mutual where the peer is a machine | **Built and verified** |
 | [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **Built and verified** |
-| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | **In progress** — forked and building green; no criterion met yet |
+| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | **In progress** — rungs 1, 3, 4 and 5 verified (AC-1 to AC-4). Total loss and the fails-closed controls are not built |
 | [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | Specified |
 | [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
 | [7](lab7/README.md) | Schema migration with Flyway — no downtime, and what survives a failover mid-migration | Specified |
@@ -161,7 +161,7 @@ needs that they do not have — the list this proof of concept exists to produce
 | **Fault domains** | Three VMs on one machine | Three independent domains. No single domain may hold two of the three nodes — [`SLA.md`](SLA.md#fault-domains-must-the-nodes-be-on-separate-hypervisors) |
 | **Fencing** | `softdog`, a kernel timer | A hardware or hypervisor watchdog. `softdog` cannot fire during a kernel panic, because the timer that would fire it has stopped too |
 | **Backup repository** | Off-host and encrypted as of Lab 3, but a **single** MinIO | A second repository. One is a single point of failure for every recovery you might ever attempt |
-| **Restore** | Not yet rehearsed — [Lab 4](lab4/README.md) builds, but has restored nothing | A restore rehearsed on a schedule, not on the day it is needed |
+| **Restore** | Rehearsed for four blast radii in [Lab 4](lab4/README.md), but only on demand — and total loss is still unproven | A restore rehearsed on a schedule, not on the day it is needed |
 | **Secrets** | Generated into an uncommitted `.secrets/`; superuser and replication passwords sit in cleartext in `patroni.yml` | A secrets manager, with each workload fetching at start — [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) |
 | **PKI** | A private CA issuing certificates at build time | Issuance, rotation, revocation, and expiry monitoring. Expiry is the one outage that is entirely preventable by watching a number |
 | **Disk encryption keys** | A root-only keyfile on the node itself | KMS, TPM or network-bound unlock. Today a stolen *disk* is safe and a stolen *node* is not |

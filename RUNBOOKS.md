@@ -559,9 +559,13 @@ rehearsed, which is why there is no runbook for it here.
 
 # 9. Undo a change that was committed and later found to be wrong
 
-**Status: REASONED** — the decision structure follows from PostgreSQL semantics.
-The restore commands are not yet exercised by a lab; [Lab 8](lab8/README.md)
-is where they become VERIFIED.
+**Status: VERIFIED for the restore mechanics, REASONED for the decision.**
+[Lab 4](lab4/README.md) exercises all three routes below end to end against a
+live cluster — restoring beside it, restoring one table from a dump, and the
+in-place rewind — and each trap called out here is one that run hit. Choosing
+*between* them, and judging whether a schema change was lossy, follows from
+PostgreSQL semantics and is not itself drilled; [Lab 8](lab8/README.md) is where
+undoing a migration becomes a rehearsed procedure.
 
 ## Before anything else
 
@@ -654,14 +658,50 @@ why this is preferred over rewinding.
 Only when the damage cannot be reconstructed and the loss is acceptable.
 
 ```sh
-sudo -u postgres patronictl -c /etc/patroni/patroni.yml pause   # FIRST
-# ... restore to the marker ...
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml pause    # FIRST
+
+# On EVERY node. Two separate acts — see the first trap below.
+sudo systemctl stop percona-patroni
+sudo -u postgres /usr/pgsql-18/bin/pg_ctl -D /var/lib/pgsql/data -w stop -m fast
+ps -eo args | grep '[p]ostgres'          # must print NOTHING before you go on
+
+# On the node being rewound, and only that node.
+sudo -u postgres pgbackrest --stanza=<stanza> --delta \
+  --type=name --target='<marker>' --target-action=promote restore
+
+# Finish recovery under pg_ctl and watch it promote. Then LEAVE IT RUNNING.
+sudo -u postgres /usr/pgsql-18/bin/pg_ctl -D /var/lib/pgsql/data -w -t 300 start
+sudo -u postgres psql -Atc 'select pg_is_in_recovery()'          # wait for 'f'
+
+# Hand the RUNNING primary back. Patroni adopts it and takes the leader lock.
+sudo systemctl start percona-patroni
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml list     # must show Leader
+
+# Only now the standbys — on each one:
+sudo rm -rf /var/lib/pgsql/data && sudo systemctl start percona-patroni
+
 sudo -u postgres patronictl -c /etc/patroni/patroni.yml resume
+sudo -u postgres pgbackrest --stanza=<stanza> --type=full backup # not optional
 ```
 
 - **Pause first**, or Patroni tries to repair the node you are deliberately
   rewinding. If the recovery is interrupted after this point, the cluster is left
   paused — see [3](#3-patroni-is-paused-and-nobody-remembers).
+- **Stopping Patroni is not stopping PostgreSQL.** The postmaster outlives its
+  unit — systemd says so, `Unit process 2327 (postgres) remains running after
+  unit stopped` — and pgBackRest then refuses: `ERROR: [038]: unable to restore
+  while PostgreSQL is running`. The orphan also blocks the next start with
+  `FATAL: pre-existing shared memory block ... is still in use`. Check `ps`.
+- **Do not stop PostgreSQL before handing the node back.** A paused Patroni does
+  not start PostgreSQL — it logs `PAUSE: postgres is not running` and waits. The
+  node then stays down until the resume, at which point Patroni races for the
+  free leader lock, loses it on a WAL position the DCS recorded *before* the
+  rewind (`My wal position exceeds maximum replication lag`), and brings the node
+  back as a **replica**. The rewind is correct on disk and the cluster has no
+  primary. Start Patroni onto the running, promoted primary instead.
+- **Take a full backup afterwards.** Every backup in the repository now predates
+  the rewind and sits on an abandoned timeline. Until you take one, the only
+  route back to the present is an old backup replayed across a timeline switch.
 - **Both standbys must be rebuilt.** They hold the same wrong state; they are not
   a recovery source.
 - **Every transaction after the target is discarded.** Count them and record the

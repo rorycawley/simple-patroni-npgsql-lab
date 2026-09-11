@@ -54,8 +54,17 @@ leader="$(leader_vm)" || { echo "cannot find the leader" >&2; exit 1; }
 sql() { on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc "$1" </dev/null; }
 
 cleanup() {
-  on "$leader" sudo pkill -f rung4-client.sh >/dev/null 2>&1
-  on "$leader" sudo bash -c "rm -f /tmp/rung4-*" >/dev/null 2>&1
+  # Every node, not just this run's leader: the client and its files land wherever
+  # the leader was at the time, and leadership moves between runs. A survivor
+  # keeps appending to this run's failure counters.
+  #
+  # rung4* not rung4-*: the dump lands as /tmp/rung4.dump, which a hyphen glob
+  # misses. Found by auditing the node rather than by the check complaining.
+  local vm
+  for vm in "${VM_NAMES[@]}"; do
+    on "$vm" sudo pkill -f rung4-client.sh >/dev/null 2>&1
+    on "$vm" sudo bash -c "rm -f /tmp/rung4*" >/dev/null 2>&1
+  done
   on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc \
     "drop table if exists public.rung4" </dev/null >/dev/null 2>&1
   on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc \

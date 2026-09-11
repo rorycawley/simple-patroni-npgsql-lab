@@ -63,9 +63,16 @@ cleanup() {
   # runs leaves the previous run's client appending failures into this run's
   # counters -- which is how 48 failures appeared from a client that had already
   # been "cleaned up".
-  on "$leader" sudo pkill -f rung3-client.sh >/dev/null 2>&1
-  on "$leader" sudo -u postgres "$PGBIN/pg_ctl" -D "$RESTORE_DIR" stop -m immediate >/dev/null 2>&1
-  on "$leader" sudo bash -c "rm -rf ${RESTORE_DIR:?}/* ${RESTORE_DIR}/.??* /tmp/rung3-client.*" >/dev/null 2>&1
+  # Every node, not just this run's leader. The copy is built wherever the leader
+  # was AT THE TIME, and leadership moves between runs -- so cleaning only the
+  # current leader can leave a promoted copy running on port 5433 elsewhere, and
+  # the next run would read that stale database instead of its own restore.
+  local vm
+  for vm in "${VM_NAMES[@]}"; do
+    on "$vm" sudo pkill -f rung3-client.sh >/dev/null 2>&1
+    on "$vm" sudo -u postgres "$PGBIN/pg_ctl" -D "$RESTORE_DIR" stop -m immediate >/dev/null 2>&1
+    on "$vm" sudo bash -c "rm -rf ${RESTORE_DIR:?}/* ${RESTORE_DIR}/.??* /tmp/rung3-client.*" >/dev/null 2>&1
+  done
   on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc "drop table if exists public.rung3" >/dev/null 2>&1
   on "$leader" sudo -u postgres "$PGBIN/psql" -d appdb -Atc \
     "delete from public.ha_probe where client_name = 'rung3-client'" >/dev/null 2>&1
