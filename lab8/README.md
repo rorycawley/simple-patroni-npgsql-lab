@@ -57,6 +57,23 @@ option: clock skew, and no way to separate two events in the same second.
 
 ## Three instruments, escalating
 
+This table is about what to **take before** a migration. Which instrument to
+**reach for afterwards** is the same question every recovery asks, and it has one
+answer for the whole series: the ladder in
+[`RUNBOOKS.md`](../RUNBOOKS.md#which-recovery-do-you-need), whose rungs
+[Lab 4](../lab4/README.md) proves.
+
+This lab owns **no rung**. Rungs 4 and 5 — recovering one table from a dump, and
+rewinding the cluster — are mechanisms, and [Lab 4](../lab4/README.md) proves
+both. What this lab adds is the only thing a mechanism cannot tell you: for *this
+damage*, which rung is enough, and what the other one would have cost.
+
+Worth reading the ladder first, because it carries a rung this lab does not:
+**rung 3**, restoring a copy beside the live cluster to read the old values out.
+It recovers a mangled table while losing nothing and stopping nothing, and for a
+migration that damaged data rather than schema it is usually the right answer —
+cheaper than everything below.
+
 The mistake is reaching for the last one first. Rewinding the cluster to the
 marker discards **every transaction committed since** — including all the
 unrelated business that happened while the problem was being diagnosed.
@@ -96,9 +113,19 @@ two mangled tables.
 | --- | --- | --- |
 | AC-1 | The marker survives to the repository | After `pg_create_restore_point` and `pg_switch_wal`, the marker is present in archived WAL — verified from the repository, not from the primary's memory |
 | AC-2 | A bad migration is invisible to every HA mechanism | After it applies: one leader, two streaming standbys, no alert, no failover — and **both standbys carry the same broken schema** |
-| AC-3 | Table-level recovery loses nothing else | Restore the affected tables from the targeted dump; rows written to *other* tables after the migration are still present |
-| AC-4 | Full PITR reaches the marker exactly | The restored cluster has the pre-migration schema, contains every transaction committed before the marker, and none committed after |
-| AC-5 | The cost is measured, not described | Report how many committed transactions AC-4 discarded, and how long the cluster was unavailable |
+| AC-3 | The cost of each way out is measured, not described | For this migration, report what **rung 4** costs (which tables came back, what else moved) and what **rung 5** costs (how many committed transactions were discarded, and how long the cluster was unavailable) |
+
+The mechanisms themselves — restoring one table from a dump, and rewinding to an
+exact point — are [Lab 4](../lab4/README.md)'s rungs 4 and 5, proven there
+against a deliberate change. This lab does not re-prove them. It applies them to
+the one situation nothing else in the series covers, and measures what choosing
+between them costs.
+
+> Two criteria left this lab when [Lab 4](../lab4/README.md) took the ladder.
+> They asserted table-level recovery and an exact PITR boundary — both
+> *mechanisms*, and the second a straight duplicate of Lab 4's AC-4. Keeping
+> them here would have meant proving the same property twice and inviting the
+> two labs to disagree about it.
 
 ### AC-2 is the point of the lab
 
@@ -107,11 +134,17 @@ Green health checks, no promotion, no alert — and the corruption faithfully
 replicated to both standbys. Until that is demonstrated, the case for this lab is
 theoretical.
 
-### AC-5 is what stops it being a demo
+### AC-3 is what stops it being a demo
 
 Any restore can be made to look successful. The number that matters is what it
 threw away. Without it, "we restored to before the migration" sounds like a clean
 recovery instead of the trade it is.
+
+It is also the criterion that makes the ladder's ordering real for this scenario
+rather than general. Lab 4 shows that rung 4 costs less than rung 5. This lab
+answers the question an operator actually has in front of them: *for the damage
+this migration did*, is rung 4 enough, and if not, exactly how much does rung 5
+discard?
 
 ## Notes specific to this cluster
 

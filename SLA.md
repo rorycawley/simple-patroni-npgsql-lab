@@ -129,7 +129,7 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
 | Planned switchover | **0** | ~2s to move the leader | n/a — scheduled | measured, n = 1 |
 | Every standby lost at once | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
-| Corruption, deletion, bad migration | **≤ 60s**, bounded by `archive_timeout` — not by backup age | hours — restore plus replay | **not established** | RPO measured in [Lab 3](lab3/README.md); RTO awaits Labs 4 and 8 |
+| Corruption, deletion, bad migration | **≤ 60s**, bounded by `archive_timeout` — not by backup age | **depends on the instrument** — see below | **not established** | RPO measured in [Lab 3](lab3/README.md); RTO awaits [Lab 4](lab4/README.md) |
 
 ### The last row's RPO is now measured; its RTO is not
 
@@ -154,6 +154,17 @@ stops at the first failover would make this number fiction.
 **The RTO stays unestablished**, and deliberately so. Knowing what you could lose
 is not knowing how long you would be down, and only a rehearsed restore
 ([Lab 4](lab4/README.md)) can supply that.
+
+When it does, it will supply a **range, not a number**. "Recovery" is not one
+procedure: [Lab 4](lab4/README.md) covers four, from replacing a node to
+rebuilding from nothing, and they differ by orders of magnitude in both downtime
+and data discarded. Recording a single RTO for that row would mean picking one
+rung and implying it was the only option — which is exactly the mistake that
+makes people rewind a cluster to recover one table.
+
+The two figures are also independent, and reporting only elapsed time inverts
+the decision: rebuilding from nothing may take hours and lose a minute, while
+rewinding to a marker takes minutes and loses a day.
 
 **The last row is outside what HA can address.** Failover, fencing and quorum
 commit all assume a node stopped working. A bad migration or an erroneous

@@ -32,7 +32,7 @@ point of the exercise.
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | **Built and verified** |
 | [2](lab2/README.md) | Every Lab 1 guarantee, now on LUKS2 volumes — PostgreSQL and etcd on separate devices — with TLS on every channel, mutual where the peer is a machine | **Built and verified** |
 | [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **Built and verified** |
-| [4](lab4/README.md) | Recovery from total loss: VMs, volumes and local secrets destroyed, then rebuilt onto fresh machines | Specified |
+| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | Specified |
 | [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | Specified |
 | [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
 | [7](lab7/README.md) | Schema migration with Flyway — no downtime, and what survives a failover mid-migration | Specified |
@@ -296,7 +296,7 @@ One subject per file, with no file repeating another.
 | [`lab1/README.md`](lab1/README.md), [`lab2/README.md`](lab2/README.md) | That lab alone — its scope, its acceptance criteria, how each is proven, and how to run it |
 | [`lab3`](lab3/README.md) … [`lab8/README.md`](lab8/README.md) | The design and acceptance criteria for each unbuilt stage |
 | [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md), [`lab3/ansible/README.md`](lab3/ansible/README.md) | How that lab's automation installs and configures the nodes, and the network policy it applies |
-| [`lab2/PLAN.md`](lab2/PLAN.md), [`lab3/PLAN.md`](lab3/PLAN.md) | How that lab is built rather than what it must prove: the phases, their order, the risks worth watching, and what carries into the next lab |
+| [`lab2/PLAN.md`](lab2/PLAN.md), [`lab3/PLAN.md`](lab3/PLAN.md), [`lab4/PLAN.md`](lab4/PLAN.md) | How that lab is built rather than what it must prove: the phases, their order, the risks worth watching, and what carries into the next lab |
 
 There is one intentional exception: the two `ansible/README.md` files overlap
 heavily. Lab 2 is a standalone copy of Lab 1, and pointing one at the other would

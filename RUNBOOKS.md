@@ -116,6 +116,43 @@ Read the answers off this table:
 names its members — `ANY 1 (pg2,pg3)` — so the difference between the two is the
 single most informative character in this document.
 
+## Which recovery do you need?
+
+Every row below gets the data back. They differ by a factor of hundreds in what
+that costs, and **the expensive mistake is reaching too far down this table.**
+Recovering one dropped table by rewinding the cluster discards every transaction
+committed since — including all the unrelated work done while you were working
+out what went wrong.
+
+Start at the top and stop at the first rung that fits. The numbers are referred
+to elsewhere, so they are worth having.
+
+| Rung | What happened | Reach for | You lose | Downtime |
+| --- | --- | --- | --- | --- |
+| **0** | It is not committed yet | `ROLLBACK` | nothing | none |
+| **1** | One node is gone | Nothing — Patroni already promoted. Rebuild the node when convenient | nothing | none |
+| **2** | You can reverse it in SQL from what you know | A forward fix | nothing | none |
+| **3** | You know **which rows**, not what they held before | **Restore a copy beside production**, read the old values out of it, fix forward | **nothing** | **none** |
+| **4** | One table is mangled, the rest is fine | Restore that table from a logical dump | later writes to that table | that table |
+| **5** | The damage is too pervasive to reconstruct | Rewind the cluster to a marker | **everything committed since** | total |
+| **6** | Every node is gone | Rebuild from the repository onto new machines | up to `archive_timeout` | hours |
+
+This ladder is about getting **data** back. Losing *two* nodes is a different
+problem — the data is fine and the cluster is read-only until one returns — and
+it is [runbook 4](#4-etcd-has-lost-quorum), not a rung here.
+
+**Rung 3 is the one people skip**, and it is usually the right answer: a
+restore does **not** have to be done *over* production. Restoring a copy
+alongside it costs an outage of nothing and loses nothing, and it is the only
+row that recovers unknown values without discarding anything.
+
+Rungs 5 and 6 are the only ones that cost committed data. Do not reach for
+them because they are the procedures you happen to know.
+
+> Every row above needs the repository. If the repository is gone as well, none
+> of this is available — that is the one failure this design does not recover
+> from, and the reason a second repository belongs in any production build.
+
 ---
 
 # 1. Writes are blocked on synchronous replication
@@ -548,11 +585,18 @@ Not "do you remember what you did" — can you identify the exact rows *and* wha
 they held before? Usually not: dead tuples are unreliable after vacuum, and WAL is
 not queryable.
 
-| Situation | Do this |
-| --- | --- |
-| You can reverse it in SQL from what you know | Forward-fix. Nothing lost |
-| You know which rows, not their old values | **Restore beside, read the old values, fix forward** |
-| Damage too pervasive to reconstruct, and losing everything since is acceptable | Rewind production. Last resort |
+These are rungs 2, 3 and 5 of
+[the ladder](#which-recovery-do-you-need), narrowed to the case where the change
+was yours:
+
+| Rung | Situation | Do this |
+| --- | --- | --- |
+| 2 | You can reverse it in SQL from what you know | Forward-fix. Nothing lost |
+| 3 | You know which rows, not their old values | **Restore beside, read the old values, fix forward** |
+| 5 | Damage too pervasive to reconstruct, and losing everything since is acceptable | Rewind production. Last resort |
+
+If one table is mangled and the rest is fine, you are on **rung 4** instead —
+restore that table from a logical dump, which costs nothing outside it.
 
 ## The usual answer: restore beside, not over
 
@@ -566,7 +610,31 @@ sudo -u postgres pgbackrest --stanza=<cluster> --type=name --target=<marker> \
      --pg1-path=/var/lib/pgsql-restore restore
 ```
 
-Then read the old values out of the restored copy and `UPDATE` production back.
+Then start the copy — **with archiving off** — and read the old values out of it.
+
+```sh
+sudo -u postgres /usr/pgsql-18/bin/pg_ctl -D /var/lib/pgsql-restore -w \
+  -o "-p 5433 -c archive_mode=off -c listen_addresses=localhost" start
+```
+
+> **`archive_mode=off` is not optional.** The copy inherits `archive_command`
+> from the backup it came from. Started with archiving on, it pushes WAL from a
+> *divergent timeline* into the same repository — corrupting the thing you are
+> recovering from, silently, while both the copy and production appear fine.
+> Measured, not theorised.
+
+Connect to it over the **Unix socket**, not TCP. The copy also inherits
+`pg_hba.conf`, so a TCP connection demands TLS and a password: adding
+`-h 127.0.0.1` makes it prompt, and inside a script that prompt will silently
+eat the rest of your input.
+
+```sh
+sudo -u postgres /usr/pgsql-18/bin/psql -p 5433 -d appdb   # socket, peer auth
+```
+
+Read the old values out, `UPDATE` production back, then stop the copy and remove
+its data directory — it is a complete copy of production and should not outlive
+the repair.
 
 **Nothing committed after the change is lost** — every unrelated transaction that
 happened while you were diagnosing survives. That is the whole point, and it is

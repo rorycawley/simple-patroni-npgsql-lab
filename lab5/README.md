@@ -61,6 +61,7 @@ cluster, so an alert on it has no false-positive mode.
 | PostgreSQL | `postgres_exporter` | Replication lag, `sync_state`, backends in `SyncRep`, connections against `max_connections` |
 | Node | `node_exporter` | Disk free on the LUKS volumes, CPU, memory |
 | pgBackRest | no native exporter — see below | |
+| Restore rehearsal | the timestamp of the last successful recovery drill | see below |
 
 Two integration points fall out of Lab 2 rather than being invented here. Its
 Patroni REST API and etcd both require **client certificates**, so the collector
@@ -80,6 +81,18 @@ complementary sources, because neither alone is sufficient:
 | --- | --- |
 | `pg_stat_archiver` (native PostgreSQL) | Is WAL archiving working *right now*? `archived_count`, `failed_count`, `last_failed_time` |
 | `pgbackrest info --output=json`, parsed to a textfile collector | When did a backup last *succeed*? Age, type, repository size |
+
+### The second staleness metric: when was a restore last proven?
+
+[Lab 4](../lab4/README.md) creates the need for this one. A backup regime that
+has not been restored since the last schema change, PostgreSQL upgrade or
+certificate rotation is a hypothesis again — and **nothing else in this series
+would notice**. Backup age answers "is the repository still filling?"; restore
+rehearsal age answers "does any of it still work?", and only the second one
+catches a repository that fills perfectly with backups nobody can use.
+
+It is the cheapest alert here and the one most likely to be missing, because it
+measures a human activity rather than a system's.
 
 The headline metric is the **age of the last successful backup**, and the alert
 is on staleness rather than on any error. `pg_stat_archiver` gives the earliest
