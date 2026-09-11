@@ -233,7 +233,26 @@ zero failed transactions.
 > the values it yields cannot be read from production at any point. Otherwise
 > the check passes on a cluster where nothing was ever restored.
 
-### P4 — Rung 4: one table back, and nothing else moved
+### P4 — Rung 4: one table back, and nothing else moved — **done**
+
+> `make test_table` passes, repeatably and first time. A table is mangled, its
+> good values exist only in the encrypted dump, and `pg_restore -t` brings back
+> that one table while a client commits to another throughout.
+>
+> **Rung 4 cost: under a second, 5 rows lost — all of them in the damaged table
+> — and 0 downtime.** No failover, no pause, no restart, both standbys still
+> streaming, repository still verifying.
+>
+> Those 5 rows are the point, not an embarrassment. They were committed to the
+> table *after* the dump was taken, and the ladder says this rung loses "later
+> writes to that table". Measuring it is what lets someone choose between rungs:
+> a rung whose cost is unstated is a rung nobody can weigh.
+>
+> The assertion a demonstration would skip is the third one: `ha_probe` kept
+> every row written **during** the restore, and none of its existing rows were
+> discarded. Restoring one table is easy; restoring it without disturbing
+> anything else is the property that makes this cheaper than rewinding.
+
 
 **What.** The cheaper of the two instruments for damaged data, and the one an
 operator should reach for first.
