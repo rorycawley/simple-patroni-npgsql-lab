@@ -1,9 +1,14 @@
 # Lab 3: durable backups
 
 > **Status: built and verified.** All six acceptance criteria are met, and
-> `make all` is **23 of 23 from nothing in 15m04s** — no VMs, no disks, no
+> `make all` is **23 of 23 from nothing in 15m55s** — no VMs, no disks, no
 > secrets, no repository and no passphrases to begin with, and every check this
 > lab adds passing alongside every one inherited from Labs 1 and 2.
+>
+> An earlier run of the same 23 phases is not quoted here, because one of them
+> passed on an empty set: `test_repository` ran before any backup existed and
+> reported *"all 0 backup(s) have objects in the bucket"*. It now runs after
+> `test_backup`, and an empty repository fails it rather than satisfying it.
 >
 > What this lab does **not** claim is that any of it can be restored. That is
 > [Lab 4](../lab4/README.md), and keeping the two apart is the point: a
