@@ -699,6 +699,18 @@ sudo -u postgres pgbackrest --stanza=<stanza> --type=full backup # not optional
   rewind (`My wal position exceeds maximum replication lag`), and brings the node
   back as a **replica**. The rewind is correct on disk and the cluster has no
   primary. Start Patroni onto the running, promoted primary instead.
+- **Either leader-key state is fine, and which one you get is a race.** Nothing
+  refreshes the key while the cluster is stopped, so a restore faster than the
+  30s `ttl` leaves it held and a slower one lets it expire. Both are verified
+  with a rewound node, and they are not the same path:
+
+  | Leader key when Patroni starts | What happens |
+  | --- | --- |
+  | Still held by this node | It reclaims its own key and continues as leader. No election, so the rewound WAL position is never compared against anything |
+  | Expired | It races for a free lock. **With PostgreSQL running it adopts the primary and wins**; with PostgreSQL down it loses on the stale WAL position and demotes — the trap above |
+
+  So the rule that matters is the previous bullet, not the timing. Leave
+  PostgreSQL running and both branches end with the rewound node as leader.
 - **Take a full backup afterwards.** Every backup in the repository now predates
   the rewind and sits on an abandoned timeline. Until you take one, the only
   route back to the present is an old backup replayed across a timeline switch.

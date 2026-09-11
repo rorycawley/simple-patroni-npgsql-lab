@@ -48,6 +48,7 @@ readonly COPY_PORT=5433
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
 [[ -f "$LAB_DIR/.env" ]] || { echo "Run make create_vms first" >&2; exit 1; }
+source "$LAB_DIR/.env"
 
 failures=0
 pass() { echo "  ok: $1"; }
@@ -225,6 +226,28 @@ downtime=$((SECONDS - started))
 #
 # Started onto a running primary it adopts that instead and takes the lock, which
 # is the reason the pause is still on at this point.
+# Which branch of the handback this run exercised, recorded rather than assumed.
+# The leader key has a 30s TTL and nothing refreshes it while the cluster is
+# stopped, so whether it is still held when Patroni returns is a RACE with how
+# long the restore took. Both outcomes are correct and they are not the same
+# procedure, so the run says which one it got:
+#
+#   still held   Patroni reclaims its own key and continues as leader. No
+#                election, so the rewound node's WAL position is never compared
+#                with anything.
+#   expired      Patroni races for a free lock. This is the branch that demoted
+#                the node to a replica when PostgreSQL was down -- with it up,
+#                Patroni adopts the running primary and takes the lock.
+lock_holder="$(on "$leader" sudo bash -c \
+  "etcdctl --cacert=/etc/lab4/pki/ca.crt --cert=/etc/lab4/pki/etcd.crt \
+   --key=/etc/lab4/pki/etcd.key --endpoints=https://${PG1_IP}:2379 \
+   get /service/lab4/leader --print-value-only" 2>/dev/null | tr -d '\n')"
+if [[ -n "$lock_holder" ]]; then
+  echo "  handback branch: the leader key is STILL HELD by '$lock_holder' (restore beat the ${ttl:-30}s TTL)"
+else
+  echo "  handback branch: the leader key has EXPIRED; Patroni must race for a free lock"
+fi
+
 on "$leader" sudo systemctl start percona-patroni >/dev/null 2>&1
 adopted=""
 for _ in {1..40}; do
