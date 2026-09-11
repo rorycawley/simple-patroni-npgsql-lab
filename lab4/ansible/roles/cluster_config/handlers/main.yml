@@ -1,0 +1,16 @@
+---
+# Patroni reads patroni.yml at startup and on SIGHUP. Writing the file is not
+# enough: until this runs, the file on disk and the configuration the process is
+# using disagree, silently.
+#
+# This went unnoticed until Lab 4 changed create_replica_methods -- the first
+# LOCAL Patroni setting this series alters after bootstrap. Everything before it
+# lived in the DCS, which patronictl edit-config applies to the running cluster,
+# so a missing reload never showed.
+#
+# Serialised by `serial` on the play, so the leader is never reloaded alongside
+# its standbys. A reload does not restart PostgreSQL or move the leader.
+- name: Reload Patroni
+  ansible.builtin.systemd:
+    name: percona-patroni
+    state: reloaded

@@ -53,8 +53,22 @@ postgresql:
       password: {{ postgres_superuser_password | to_json }}
   parameters:
     unix_socket_directories: /var/run/postgresql
+  # pgbackrest FIRST, basebackup as the fallback. Rebuilding a standby from the
+  # primary loads the primary under exactly the conditions that caused the node
+  # to be lost -- and on a large database it is the difference between a rebuild
+  # that costs the cluster nothing and one that costs it its remaining headroom.
+  # The repository already holds everything needed, and is not on the write path.
+  #
+  # keep_data, because --delta reuses whatever is already on disk instead of
+  # transferring it again. no_params, because Patroni would otherwise append its
+  # own arguments to a command that already knows what it is doing.
   create_replica_methods:
+    - pgbackrest
     - basebackup
+  pgbackrest:
+    command: /usr/bin/pgbackrest --stanza={{ lab4_cluster_name }} --delta restore
+    keep_data: True
+    no_params: True
   basebackup:
     checkpoint: fast
 

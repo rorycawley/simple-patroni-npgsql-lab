@@ -154,7 +154,34 @@ repository rather than only from the primary's memory.
 > repository would have skipped it — and made this lab unrunnable whenever Lab 3
 > had been torn down.
 
-### P2 — Rung 1: replace a node from the repository
+### P2 — Rung 1: replace a node from the repository — **done**
+
+> `make test_replica` passes, repeatably: a standby is destroyed and rebuilt
+> **from the repository** in 1–2s, `restore size = 30.4MB, file total = 1286`,
+> with 0 rows lost and the primary never asked for a base backup.
+>
+> **Configuring it was not enough, and that is the finding.** `configure_cluster`
+> wrote the new `patroni.yml` and nothing told Patroni to read it — the process
+> had been running for twelve minutes with the old config, so the first rebuild
+> silently used `basebackup`. Every setting this series had changed until now
+> lives in the **DCS**, which `patronictl edit-config` applies to a running
+> cluster; `create_replica_methods` is the first *local* setting altered after
+> bootstrap, and it exposed that the role never reloads Patroni. A handler now
+> sends SIGHUP whenever `patroni.yml` changes.
+>
+> The check itself was wrong three times before it was right, each time in the
+> same direction — passing on evidence it had not actually observed:
+>
+> | Attempt | Why it was wrong |
+> | --- | --- |
+> | Waited for `streaming` immediately | `reinit` is asynchronous; the node was still streaming from before. "Passed" in 1s having watched nothing |
+> | Waited for `Removing data directory` | That message belongs to the *basebackup* path. `keep_data: True` means pgbackrest leaves the directory, and logs `Leaving data directory uncleaned` |
+> | Cleared the journal with `--rotate --vacuum-time=1s` | Does not clear the **active** journal, so it matched the previous run's messages. A false pass, and the most dangerous of the three |
+>
+> It now takes a journal **cursor** before `reinit` and reads only what follows.
+> The timings changed from 39s and 67s to 1–2s once the measurement stopped
+> including the detector's own wasted polling.
+
 
 **What.** A standby is rebuilt without touching the primary.
 **How.** Add `pgbackrest` to Patroni's `create_replica_methods`, ahead of

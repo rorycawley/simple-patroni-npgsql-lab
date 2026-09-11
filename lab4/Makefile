@@ -1,4 +1,4 @@
-.PHONY: help all check clean minio_start minio_stop minio_status minio_destroy test_minio test_history test_repository test_backup test_chain test_dump test_encryption test_archive test_runbook test_at_rest test_pki test_in_transit test_identity test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
+.PHONY: help all check clean minio_start minio_stop minio_status minio_destroy test_minio test_history test_replica test_repository test_backup test_chain test_dump test_encryption test_archive test_runbook test_at_rest test_pki test_in_transit test_identity test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms
 
 # `make` on its own prints this help rather than building a cluster, because
 # `all` creates VMs and runs destructive fault injection.
@@ -49,6 +49,7 @@ help:
 	@printf '%s\n' '  test_chain         AC-3: the chain verifies, and retention expires dependents'
 	@printf '%s\n' '  test_dump          AC-4: the dump is readable and reloads'
 	@printf '%s\n' '  test_history       A base backup and a marker exist to restore from'
+	@printf '%s\n' '  test_replica       AC-1: a node is rebuilt from the repository, not the primary'
 	@printf '%s\n' '  test_repository    AC-2: the repository is off-host and complete'
 	@printf '%s\n' '  test_encryption    AC-5: every object needs its passphrase; plaintext refused'
 	@printf '%s\n' '  test_archive       AC-6: archiving survives a promotion; window measured'
@@ -162,6 +163,9 @@ test_dump:
 
 test_history:
 	./scripts/test-history.sh
+
+test_replica:
+	./scripts/test-replica.sh
 
 test_repository:
 	./scripts/test-repository.sh
