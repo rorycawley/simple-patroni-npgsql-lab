@@ -234,6 +234,40 @@ Its second half is what makes this lab measurable rather than merely green.
 backup schedule into an RPO, and it is bounded by `archive_timeout`, not by how
 often a backup runs.
 
+## Running it
+
+```sh
+make all      # build, start the object store, run every check, report
+make check    # re-run the checks against a cluster that is already up
+make clean    # destroy the VMs and generated files -- but NOT the backups
+```
+
+The last one is the difference from every earlier lab, and it will surprise you
+once. `make clean` deliberately keeps the repository in `.minio/` and the cipher
+passphrases in `.recovery-inputs/`, because [Lab 4](../lab4/README.md)'s whole
+premise is restoring a destroyed cluster from exactly those.
+
+**So `make all` after a `make clean` fails**, at `stanza-create`:
+
+```text
+ERROR: [028]: backup and archive info files exist but do not match the database
+```
+
+That is pgBackRest refusing to do something dangerous, not a broken lab. A
+stanza belongs to one database, identified by its system id, and a rebuild
+creates a different one. Adopting the old stanza would put two unrelated
+databases in one history, which is how a restore quietly returns the wrong data.
+
+Two ways forward, and they are the two this series keeps separate:
+
+| You want | Do |
+| --- | --- |
+| A fresh lab; the old backups no longer matter | `make minio_destroy && make all` |
+| The data back | Restore from the repository — [Lab 4](../lab4/README.md), not built |
+
+`make minio_destroy` is the only command here that deletes a backup. Nothing
+else does, on purpose.
+
 ## What this contributes back
 
 [`SLA.md`](../SLA.md) records the row for corruption, deletion and a bad

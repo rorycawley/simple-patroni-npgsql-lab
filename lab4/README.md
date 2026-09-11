@@ -69,6 +69,25 @@ live in [`RUNBOOKS.md`](../RUNBOOKS.md), where this one is still a **stub** —
 writing confident steps for a restore nobody has performed is the failure this
 lab exists to prevent.
 
+### The first two rows already survive, and that was not free
+
+[Lab 3](../lab3/README.md) built this rather than leaving it to be arranged here.
+Its `make clean` destroys the VMs, their volumes and `.secrets/` — and
+deliberately keeps the repository in `.minio/` and both cipher passphrases in
+`.recovery-inputs/`, outside everything a teardown removes.
+
+That split was tested by accident within a day of being written. A rebuild
+regenerated `.secrets/` with a new CA and new passwords while the repository
+survived; because the passphrases had been kept out of it, the surviving backups
+were still readable. Had they been born in `.secrets/` like every other
+credential, a routine rebuild would have made them **permanently** unreadable —
+the failure this table's second row names.
+
+It also surfaced the constraint this lab has to work within: a pgBackRest stanza
+belongs to one database, so a rebuilt cluster cannot adopt the old repository.
+Recovery here is therefore a *restore*, never a rebuild that happens to find
+backups lying around.
+
 ## Restoring onto fresh VMs
 
 The rebuilt nodes are new instances with new disks, and Lima will generally give
