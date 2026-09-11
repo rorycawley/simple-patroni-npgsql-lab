@@ -115,7 +115,28 @@ volume is a distinct `crypto_LUKS` device mounted and empty.
 > exactly that. It is the same data; it does not become less sensitive by being
 > a copy.
 
-### P1 — A history worth restoring from
+### P1 — A history worth restoring from — **done**
+
+> `make test_history` passes, and repeatably: two full backups, ten rows either
+> side of a marker, the marker's WAL segment confirmed present **in the
+> repository** rather than only on the primary, and `verify` passing across the
+> window.
+>
+> It emits the marker in all three forms at one moment, which is what AC-4 needs
+> in order to compare them:
+>
+> ```text
+> restore point  lab4_history_20260911153433
+> LSN            0/63001F10
+> timestamp      2026-09-11 16:34:33.941832+01
+> ```
+>
+> The first version was not repeatable — it asserted exactly ten rows each side,
+> so a second run would have counted twenty and failed for a reason unrelated to
+> the property. It now clears its own rows first. Worth catching here: a check
+> that only works once is a check that fails the first time someone re-runs it
+> under pressure.
+
 
 **What.** The repository gains backups and WAL spanning a known sequence of
 writes, before any recovery is attempted.
