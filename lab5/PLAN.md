@@ -245,13 +245,44 @@ corrupting one and watching the alert fire.
 > monitoring lab that only alerts on *age* would have reported this repository
 > healthy throughout.
 
-### P4 — A failover, reconstructed from logs alone
+### P4 — A failover, reconstructed from logs alone — **done**
 
 **What.** Given only Loki, answer: which node was primary, when was it lost, which
 was promoted, and how long the gap was.
 **Serves.** AC-4.
 **Done when.** The answer is derived from log queries, with no reference to the
 test that induced it.
+
+> **Done.** Answered from Loki alone, then checked against the cluster only
+> afterwards:
+>
+>     a promotion is in the logs: lab5-pg1 at 23:29:51
+>     it replaced lab5-pg2, last seen holding the lock at 23:29:31
+>     the gap between the two was 20s, derived entirely from log timestamps
+>     and it is correct: the cluster's leader is pg1
+>
+> Patroni says `promoted self to leader by acquiring session lock` exactly once
+> per promotion, and `I am (X), the leader with the lock` every loop_wait. Those
+> two lines carry the whole reconstruction: who took over, who they replaced, and
+> the gap between the last lock renewal and the promotion.
+>
+> **The check induces the failover it reconstructs.** The first version searched
+> a two-hour window for any promotion, which made it depend on some earlier phase
+> having caused one -- it would fail on a fresh run for lack of a failover, and
+> the tempting repair is to widen the window until it finds an old one and passes
+> without proving anything. Inducing removes both failure modes.
+>
+> The answer is committed to BEFORE the cluster is consulted. Querying patronictl
+> first and then "confirming" it in the logs would prove only that the logs do
+> not contradict what was already known.
+>
+> The induction had to be made decisive. Killing PostgreSQL on the leader is a
+> LOCAL failure: Patroni restarts the postmaster and keeps the leader key, so no
+> promotion occurs. The first version did that, timed out waiting, and then
+> reconstructed a stale promotion from an earlier run -- reporting a leader that
+> was no longer current, which the validation caught. Patroni is now stopped
+> first, and a failover that does not happen fails the check instead of being
+> papered over with an old one.
 
 ### P5 — Monitoring the monitoring
 
