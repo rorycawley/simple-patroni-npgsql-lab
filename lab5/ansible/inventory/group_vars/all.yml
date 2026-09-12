@@ -37,6 +37,11 @@ lab5_repo_path: /pgbackrest
 lab5_repo_endpoint: "{{ lab5_host_gateway_ip }}"
 lab5_repo_port: 9300
 lab5_repo_region: us-east-1
+
+# The monitoring stack, on the control machine beside the object store. Alloy
+# pushes to these; nothing here is scraped from outside.
+lab5_loki_port: 3100
+lab5_mimir_port: 9009
 lab5_repo_uri_style: path
 
 # The backup job. Installed on all three nodes; the leader gate decides which

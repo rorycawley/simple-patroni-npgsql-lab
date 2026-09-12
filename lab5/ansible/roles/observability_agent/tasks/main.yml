@@ -1,0 +1,58 @@
+---
+# Alloy ships this node's telemetry to the stack on the control machine.
+#
+# It is deliberately a ONE-WAY relationship. Alloy pushes; nothing scrapes it
+# from outside, so the drop-zone firewall needs no new inbound rule, and the
+# monitoring stack being down cannot block anything here. That is the property
+# Lab 5 must not break: a database that stops serving because its observer went
+# away has been made less available by being watched.
+
+- name: Import Grafana's RPM packaging key
+  ansible.builtin.rpm_key:
+    key: https://rpm.grafana.com/gpg.key
+    state: present
+
+- name: Define the Grafana repository
+  ansible.builtin.yum_repository:
+    name: grafana
+    description: Grafana OSS packages
+    baseurl: https://rpm.grafana.com
+    gpgcheck: true
+    gpgkey: https://rpm.grafana.com/gpg.key
+    enabled: true
+
+- name: Install Alloy
+  ansible.builtin.dnf:
+    name: alloy
+    state: present
+
+- name: Configure Alloy
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
+# `alloy` runs unprivileged by default and cannot read the journal, so the unit
+# is given the one group that grants it. Without this it starts, reports healthy,
+# and ships no logs at all -- the failure this lab exists to notice, in its own
+# agent.
+- name: Let Alloy read the system journal
+  ansible.builtin.user:
+    name: alloy
+    groups: systemd-journal
+    append: true
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
+- name: Enable and start Alloy
+  ansible.builtin.systemd:
+    name: alloy
+    enabled: true
+    state: started
+    daemon_reload: true

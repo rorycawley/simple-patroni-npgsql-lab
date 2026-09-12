@@ -71,6 +71,12 @@ for key in minio_root_user minio_root_password \
 done
 ensure_secret "$REPO_SECRETS" minio_root_user         "lab5-admin"
 ensure_secret "$REPO_SECRETS" minio_root_password     "$(openssl rand -hex 24)"
+# Telemetry authenticates as ITSELF, not as the backup user. One object store is
+# the coupling the owner accepted; one identity is not required by it, and a
+# separate key scoped to the telemetry buckets keeps a misbehaving monitoring
+# stack away from the backup repository.
+ensure_secret "$REPO_SECRETS" telemetry_access_key  "lab5-telemetry"
+ensure_secret "$REPO_SECRETS" telemetry_secret_key  "$(openssl rand -hex 24)"
 ensure_secret "$REPO_SECRETS" minio_backup_access_key "lab5-pgbackrest"
 ensure_secret "$REPO_SECRETS" minio_backup_secret_key "$(openssl rand -hex 24)"
 

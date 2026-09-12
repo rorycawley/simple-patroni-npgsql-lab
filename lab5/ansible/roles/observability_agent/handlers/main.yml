@@ -1,0 +1,12 @@
+---
+- name: Check whether Alloy is already running
+  ansible.builtin.command: systemctl is-active --quiet alloy
+  register: lab5_alloy_running
+  failed_when: false
+  changed_when: false
+
+- name: Restart Alloy
+  ansible.builtin.systemd:
+    name: alloy
+    state: restarted
+  when: lab5_alloy_running.rc == 0

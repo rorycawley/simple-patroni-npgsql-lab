@@ -22,3 +22,4 @@
     # After cluster_config: the gate presents the patroni certificate that role
     # installs, and the job reads the pgbackrest configuration it writes.
     - role: backup_jobs
+    - role: observability_agent

@@ -49,3 +49,7 @@ publish/
 .rung6-state
 .rung6-prepare.log
 .costs/
+
+# Generated monitoring config: it embeds the telemetry secret key in plaintext,
+# the same reason .minio/ and .secrets/ are ignored.
+.observability/

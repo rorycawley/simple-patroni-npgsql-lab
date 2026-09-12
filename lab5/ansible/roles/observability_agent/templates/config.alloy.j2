@@ -1,0 +1,79 @@
+// Alloy on {{ inventory_hostname }} — Lab 5.
+//
+// P0 ships two things, deliberately the minimum that proves the pipeline end to
+// end: this node's own metrics, and its journal. The component metrics that the
+// acceptance criteria actually need — Patroni, etcd, PostgreSQL, pgBackRest —
+// arrive in P1, once there is a pipeline to carry them.
+//
+// Everything here PUSHES. Nothing scrapes this node from outside, so the
+// drop-zone firewall gains no inbound rule and the stack being unreachable
+// cannot block the database.
+
+// ---------------------------------------------------------------------------
+// Logs
+//
+// The journal carries what the runbooks actually ask operators to grep for:
+// `Watchdog device is not usable`, `system ID mismatch`, `PAUSE: postgres is not
+// running`. Keeping the unit name as a label is what makes those findable later.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "system" {
+  forward_to    = [loki.write.stack.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  labels        = {
+    job  = "systemd-journal",
+    node = "{{ inventory_hostname }}",
+  }
+}
+
+loki.write "stack" {
+  endpoint {
+    url = "http://{{ lab5_host_gateway_ip }}:{{ lab5_loki_port }}/loki/api/v1/push"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Metrics
+//
+// Node metrics first because they are the ones that answer "is the disk filling",
+// which is half of runbook 6 and the failure that ends as an outage.
+prometheus.exporter.unix "node" { }
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.node.targets
+  forward_to      = [prometheus.remote_write.stack.receiver]
+  scrape_interval = "15s"
+  job_name        = "node"
+}
+
+// Alloy's own metrics. AC-5 asks that a stopped agent be DETECTED rather than
+// read as silence, and that is only answerable if a running one is visible.
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+  targets         = prometheus.exporter.self.alloy.targets
+  forward_to      = [prometheus.remote_write.stack.receiver]
+  scrape_interval = "15s"
+  job_name        = "alloy"
+}
+
+prometheus.remote_write "stack" {
+  endpoint {
+    url = "http://{{ lab5_host_gateway_ip }}:{{ lab5_mimir_port }}/api/v1/push"
+  }
+
+  external_labels = {
+    node = "{{ inventory_hostname }}",
+  }
+}
