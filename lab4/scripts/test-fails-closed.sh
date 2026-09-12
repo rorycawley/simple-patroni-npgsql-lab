@@ -86,6 +86,7 @@ restore_tampered() {
   fi
   on "$leader" sudo -u postgres "$PGBIN/pg_ctl" -D "$RESTORE_DIR" stop -m immediate >/dev/null 2>&1
   on "$leader" sudo bash -c "rm -rf ${RESTORE_DIR:?}/* ${RESTORE_DIR}/.??*" >/dev/null 2>&1
+  declare -F resume_timers >/dev/null && resume_timers
 }
 trap restore_tampered EXIT
 on "$leader" sudo bash -c "rm -rf ${RESTORE_DIR:?}/* ${RESTORE_DIR}/.??*" >/dev/null 2>&1
@@ -173,13 +174,35 @@ left2="$(on "$leader" sudo bash -c "ls -A $RESTORE_DIR 2>/dev/null | wc -l" | tr
 # ---------------------------------------------------------------------------
 echo
 echo "=== Control 3: a repository object altered behind pgBackRest's back ==="
+# The timers are quiesced for the duration. This control runs `verify` more than
+# once against a deliberately broken repository, and a backup or expire firing
+# between those calls can remove the very object under test -- after which
+# pgBackRest correctly reports nothing wrong and the check fails for a reason
+# that has nothing to do with what it is testing. Observed once.
+for _vm in "${VM_NAMES[@]}"; do
+  on "$_vm" sudo systemctl stop lab4-backup-full.timer lab4-backup-incr.timer lab4-dump.timer \
+    >/dev/null 2>&1
+done
+resume_timers() {
+  local _vm
+  for _vm in "${VM_NAMES[@]}"; do
+    on "$_vm" sudo systemctl start lab4-backup-full.timer lab4-backup-incr.timer lab4-dump.timer \
+      >/dev/null 2>&1
+  done
+}
 # A WAL segment rather than backup.info: if the trap failed to put the original
 # back, a damaged manifest would be far harder to live with than one archived
 # segment, and `verify` checksums both.
+#
+# The NEWEST segment, not the oldest. `head -1` picks the earliest object in the
+# archive, which may sit outside what verify actually checks -- corrupting it was
+# measured to produce no complaint at all, and the control then reported that a
+# working detector was blind. The `-` in the pattern also excludes backup labels
+# and partials, which are not checksummed the same way.
 tampered_key="$(on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" \
   repo-ls "archive/$STANZA" --recurse --output=json 2>/dev/null \
   | jq -r 'to_entries[] | select(.value.type == "file") | .key' \
-  | grep -E '[0-9A-F]{24}' | head -1)"
+  | grep -E '[0-9A-F]{24}-' | tail -1)"
 tampered_key="$repo_prefix/archive/$STANZA/$tampered_key"
 [[ -n "$tampered_key" ]] || { fail "could not find a WAL object to tamper with"; exit 1; }
 echo "  target: $tampered_key"
@@ -223,7 +246,7 @@ grep -qiE "invalid result|status: *error" <<< "$out3" \
 # rests on knowing which of these is a check and which is a listing.
 on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
   && echo "  note: 'verify' itself still EXITS 0 on this damaged repository -- the verdict is in its output, not its status" \
-  || echo "  note: 'verify' exited non-zero (pgBackRest behaviour has changed; repo-verify.sh can be simplified)"
+  || echo "  note: 'verify' exited non-zero this time. Its exit code is not reliable in EITHER direction -- measured at 0 on a repository it had just reported as damaged -- which is why the verdict is read from the output"
 on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" info >/dev/null 2>&1 \
   && echo "  note: 'info' also exits 0 -- it lists what is there, it does not check it" \
   || echo "  note: 'info' also failed"
@@ -233,7 +256,16 @@ echo
 echo "=== And the repository is whole again ==="
 on "$leader" sudo bash -c "$BIN/lab4-s3 put /tmp/fc-original.bin '$tampered_key'" >/dev/null 2>&1
 tampered_key=""   # restored; the trap has nothing left to do
-"$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1 \
+# Retried, because the backup TIMERS run every couple of minutes and a verify
+# that catches a backup mid-flight reports an incomplete one -- which is damage
+# as far as repo-verify is concerned, and is not. Observed failing here once on a
+# repository that verified cleanly seconds later.
+repaired=""
+for _ in $(seq 1 10); do
+  "$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1 && { repaired=yes; break; }
+  sleep 12
+done
+[[ -n "$repaired" ]] \
   && pass "the original bytes are back and the repository verifies" \
   || fail "the repository still does not verify; it needs manual repair"
 on "$leader" sudo bash -c "rm -f /tmp/fc-original.bin /tmp/fc-tampered.bin" >/dev/null 2>&1

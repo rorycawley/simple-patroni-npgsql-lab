@@ -150,7 +150,20 @@ echo "=== AC-2: the alerts for the two failures that never heal ==="
 # Loaded, and SILENT on a healthy cluster. Both halves matter: an alert that
 # cannot fire is useless, and one that fires constantly gets muted, which is a
 # slower way of having no monitoring at all.
-rules="$(curl -s --max-time 15 "$MIMIR/prometheus/api/v1/rules" 2>/dev/null)"
+# Settle first. These rules watch the repository reporter, and the phases before
+# this one deliberately stop Patroni, pause the cluster and break archiving --
+# after which the leader gate correctly answers "cannot tell" and the rules go
+# `pending`. That is them working, not failing.
+#
+# So the check waits for them to clear rather than demanding `inactive` the
+# instant a drill ends. Simply ACCEPTING pending would be the wrong repair: it
+# would also accept a rule on its way to firing for a real reason.
+for _ in $(seq 1 24); do
+  rules="$(curl -s --max-time 15 "$MIMIR/prometheus/api/v1/rules" 2>/dev/null)"
+  unsettled="$(jq -r '[.data.groups[]?.rules[]? | select(.state != "inactive")] | length' <<< "$rules" 2>/dev/null)"
+  [[ "${unsettled:-1}" == "0" ]] && break
+  sleep 10
+done
 for a in WritesBlockedOnSyncReplication ArchivingFailing NothingArchivedRecently \
          RepositoryDoesNotVerify RepositoryHealthUnreported RepositoryLeaderUndetermined \
          BackupTooOld ArchiveBacklogGrowing; do

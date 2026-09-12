@@ -123,7 +123,6 @@ main() {
 
   run_phase "Cluster services, quorum, replication, pgBackRest" verify_cluster optional
   run_phase "Object store: reachable from every node over verified TLS" test_minio optional
-  run_phase "Monitoring: every node ships, telemetry lands in MinIO, the cluster does not depend on it" test_observability optional
   run_phase "Backups: a history exists, and only the leader creates it" test_backup optional
   run_phase "A history worth restoring from: a base backup and a marker" test_history optional
   run_phase "Repository: off-host, reachable from every node, complete" test_repository optional
@@ -145,6 +144,10 @@ main() {
   run_phase "Client guarantees: pool limit, timeouts, no blind retry" test_client optional
   run_phase "Quorum commit: configured, blocking, strict, and lossless" test_sync optional
   run_phase "Runbook: matches this lab, and its verified procedures work" test_runbook optional
+  # Runs with the fault injections, not before them. It stops etcd on a node,
+  # induces a failover and restarts the whole monitoring stack -- early in the
+  # suite that disturbed every phase after it, which assume a settled cluster.
+  run_phase "Monitoring: every node ships, telemetry lands in MinIO, the cluster does not depend on it" test_observability optional
   run_phase "Criterion 2: failover after the primary VM is lost" test_failover_vm optional
   run_phase "Criterion 2: failover after PostgreSQL is killed" test_failover_postgres optional
   run_phase "Split brain: softdog fences a frozen Patroni" test_fencing_patroni optional
