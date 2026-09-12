@@ -97,7 +97,14 @@ echo "=== No node is still writing backups to its own disk ==="
 # is not whether it is empty -- it is whether anything NEW lands there. A node
 # quietly writing locally would look healthy right up until it was lost.
 for vm in "${VM_NAMES[@]}"; do
-  recent="$(on "$vm" sudo find "$LOCAL_REPO" -type f -newer /etc/pgbackrest/pgbackrest.conf 2>/dev/null | wc -l | tr -d ' ')"
+  # The sentinel matters because this assertion PASSES ON ZERO, and a command
+  # that could not run at all also yields zero -- on() discards stderr, so an
+  # unreachable node reads as "nothing written locally". Without proof the probe
+  # executed, the check reports health it never observed.
+  probe="$(on "$vm" sudo bash -c "find '$LOCAL_REPO' -type f -newer /etc/pgbackrest/pgbackrest.conf 2>/dev/null | wc -l; echo PROBE_RAN")"
+  grep -q PROBE_RAN <<< "$probe" \
+    || { fail "${vm#$VM_PREFIX}: could not inspect $LOCAL_REPO; this check observed nothing"; continue; }
+  recent="$(head -1 <<< "$probe" | tr -d ' ')"
   [[ "${recent:-0}" == "0" ]] \
     && pass "${vm#$VM_PREFIX}: nothing written locally since the repository moved" \
     || fail "${vm#$VM_PREFIX}: $recent file(s) written to $LOCAL_REPO after the move"
@@ -105,7 +112,10 @@ done
 
 # And no backup set is hiding there, whatever its age.
 for vm in "${VM_NAMES[@]}"; do
-  local_backups="$(on "$vm" sudo ls "$LOCAL_REPO/backup/$STANZA" 2>/dev/null | grep -c 'F$' || true)"
+  probe="$(on "$vm" sudo bash -c "ls '$LOCAL_REPO/backup/$STANZA' 2>/dev/null | grep -c 'F\$'; echo PROBE_RAN")"
+  grep -q PROBE_RAN <<< "$probe" \
+    || { fail "${vm#$VM_PREFIX}: could not inspect the local repository path"; continue; }
+  local_backups="$(head -1 <<< "$probe" | tr -d ' ')"
   [[ "${local_backups:-0}" == "0" ]] \
     && pass "${vm#$VM_PREFIX}: holds no backup set of its own" \
     || fail "${vm#$VM_PREFIX}: $local_backups backup set(s) on local disk"
