@@ -15,7 +15,7 @@ It produces two things, and everything here serves one of them.
 | Deliverable | What it is | Where it lives | How far along |
 | --- | --- | --- | --- |
 | **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 4 of 8 built |
-| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 7 drilled, 3 reasoned, no stubs left |
+| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 8 drilled, 2 reasoned, no stubs left |
 
 Each stage is a lab: a self-contained cluster that builds from nothing with two
 commands and tests its own claims with executable checks. The labs are the

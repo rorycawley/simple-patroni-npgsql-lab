@@ -386,8 +386,10 @@ within `ttl`.
 
 # 5. A node will not rejoin the cluster
 
-**Status: REASONED** — assembled from failures seen while building Labs 1 and 2,
-but not driven by a single lab check.
+**Status: VERIFIED** — `make test_runbook` corrupts a standby's control file,
+runs the diagnosis below, and applies the fix. Drilling it corrected the page:
+`reinit` alone was listed as the remedy, and for this whole class of fault it
+cannot work, because Patroni is not running to receive it.
 
 ```sh
 sudo -u postgres patronictl -c /etc/patroni/patroni.yml list
@@ -406,14 +408,50 @@ Check in this order — each has been a real cause here:
 | `journalctl` for `has already been bootstrapped` | etcd first-bootstrap wedge; see `lab2/PLAN.md` |
 | Timeline divergence | `check_timeline` is `true`, so a standby that cannot reach the new timeline refuses rather than diverging |
 
-Rebuilding the node from the primary is
+## Fix — and which one depends on whether Patroni is alive there
+
+Ask this first, **on the broken node**. It selects the procedure:
+
+```sh
+sudo systemctl is-active percona-patroni
+```
+
+**Patroni is running.** Rebuild through it:
 
 ```sh
 sudo -u postgres patronictl -c /etc/patroni/patroni.yml reinit <cluster> <member>
 ```
 
-It discards that node's data directory — safe for a standby, never for the node
-holding data you have not got elsewhere.
+**Patroni is not running, or is crash-looping.** `reinit` is **unavailable**, and
+this is not obvious from the page: it works by calling that member's REST API, so
+a node whose Patroni has exited cannot receive the command. Measured —
+
+```text
+patronictl reinit ... -> HTTPSConnectionPool(host='…', port=8008):
+                         Connection refused
+```
+
+Faults that take the data directory out also take Patroni out, because it reads
+`pg_control` at startup and exits when the cluster identity is wrong:
+
+```text
+CRITICAL: system ID mismatch, node pg2 belongs to a different cluster
+percona-patroni.service: Main process exited, code=exited, status=1/FAILURE
+```
+
+So clear the directory by hand and let Patroni rebuild it on start:
+
+```sh
+sudo systemctl stop percona-patroni
+sudo rm -rf /var/lib/pgsql/data
+sudo install -d -o postgres -g postgres -m 0700 /var/lib/pgsql/data
+sudo systemctl start percona-patroni
+```
+
+Both routes discard that node's data directory — safe for a standby, **never**
+for the node holding data you have not got elsewhere. Neither touches the
+leader, and with one healthy standby left the cluster keeps accepting writes
+throughout.
 
 ---
 

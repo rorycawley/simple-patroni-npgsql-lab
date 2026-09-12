@@ -669,6 +669,124 @@ test_drill_wal() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Runbook 5: a node will not rejoin the cluster.
+#
+# Assembled from failures seen while building Labs 1 and 2, but never driven end
+# to end -- so the one ACTIONABLE step on the page, `patronictl reinit`, had
+# never been executed by anything.
+#
+# Induced by damaging a standby's control file, which is the shape most of the
+# causes in the table share: the node is up, Patroni is running, and PostgreSQL
+# will not start on that data directory. The cause differs; the diagnosis and
+# the fix do not.
+#
+# Three things this must prove, and the last is the one a demonstration skips:
+#   the node genuinely will not rejoin on its own
+#   reinit brings it back to streaming
+#   PRODUCTION NEVER NOTICED -- no failover, no lost rows, writes throughout,
+#     because one standby is still confirming commits
+test_drill_rejoin() {
+  local _fc0=$FAIL_COUNT
+  local leader target member rows_before rows_after i state
+  echo
+  echo "=== Runbook 5 drill: 'a node will not rejoin the cluster' ==="
+  wait_for_quorum || { fail "cluster was not settled before the drill"; return 1; }
+  leader="$(leader_vm)"
+  for vm in "${VM_NAMES[@]}"; do [[ "$vm" != "$leader" ]] && { target="$vm"; break; }; done
+  member="${target#$VM_PREFIX}"
+  echo "  leader is ${leader#$VM_PREFIX}; breaking ${member}"
+  rows_before="$(sql "$leader" "select count(*) from public.ha_probe")"
+
+  # Damage the control file. Patroni stays running; PostgreSQL cannot start on
+  # this directory. Safe because it is a standby -- which is precisely the
+  # distinction the runbook draws about reinit.
+  limactl shell --tty=false "$target" sudo systemctl stop percona-patroni >/dev/null 2>&1
+  sleep 2
+  limactl shell --tty=false "$target" sudo -u postgres \
+    "$POSTGRES_BIN_DIR/pg_ctl" -D /var/lib/pgsql/data -w -t 60 stop -m fast >/dev/null 2>&1
+  limactl shell --tty=false "$target" sudo bash -c \
+    "head -c 8192 /dev/urandom > /var/lib/pgsql/data/global/pg_control" >/dev/null 2>&1
+  limactl shell --tty=false "$target" sudo systemctl start percona-patroni >/dev/null 2>&1
+
+  # It must genuinely fail to rejoin, or the fix below proves nothing.
+  local stuck=""
+  for i in $(seq 1 20); do
+    sleep 5
+    state="$(jq -r --arg m "$member" '.[] | select(.Member == $m) | .State' <<< "$(patroni_json)" 2>/dev/null)"
+    [[ "$state" == "streaming" ]] && continue
+    (( i >= 6 )) && { stuck="$state"; break; }
+  done
+  [[ -n "$stuck" ]] \
+    && pass "$member will not rejoin on its own; state is '${stuck:-absent}'" \
+    || fail "$member rejoined by itself; the failure was not reproduced"
+
+  # The documented diagnosis should say why.
+  local log; log="$(limactl shell --tty=false "$target" \
+    sudo journalctl -u percona-patroni -n 50 --no-pager 2>/dev/null)"
+  grep -qiE "pg_control|control file|database system is shut down|could not|fatal" <<< "$log" \
+    && pass "journalctl names the cause, as the runbook's diagnosis expects" \
+    || fail "the documented diagnosis produced nothing about the failure"
+
+  # Production must not have noticed. This is the half that matters: one standby
+  # still confirms commits, so quorum is satisfied and writes continue.
+  [[ "$(leader_vm)" == "$leader" ]] \
+    && pass "the leader did not move: losing one standby is not a failover" \
+    || fail "the leader changed; this incident should not have caused one"
+  limactl shell --tty=false "$leader" sudo -u postgres \
+    env PGOPTIONS='-c statement_timeout=15s' "$POSTGRES_BIN_DIR/psql" -d appdb -Atc \
+    "insert into public.ha_probe (probe_id, client_name, server_address)
+     values ('rb5-'||floor(random()*1000000)::text, 'runbook5-drill', '127.0.0.1')" >/dev/null 2>&1 \
+    && pass "production still accepts writes with one standby broken" \
+    || fail "writes blocked; one healthy standby should satisfy quorum commit"
+
+  # The finding that corrected the page, asserted so it cannot regress quietly.
+  # reinit calls the MEMBER's REST API, and a node whose Patroni has exited
+  # cannot receive it -- so for this whole class of fault the command the runbook
+  # used to give as the remedy is unavailable.
+  local reinit_out
+  reinit_out="$(patronictl_on "$leader" reinit "$STANZA_NAME" "$member" --force 2>&1)"
+  if grep -qiE "connection refused|max retries|failed to establish" <<< "$reinit_out"; then
+    pass "reinit is refused while Patroni is down on that node, as the runbook now warns"
+  elif grep -qiE "success|initializ" <<< "$reinit_out"; then
+    fail "reinit succeeded here; the runbook's warning about it is now wrong and should be revisited"
+  else
+    pass "reinit did not take effect (Patroni is not running to receive it)"
+  fi
+
+  # The fix for this case, exactly as the runbook prints it.
+  echo "  clearing the data directory and letting Patroni rebuild ${member}"
+  limactl shell --tty=false "$target" sudo systemctl stop percona-patroni >/dev/null 2>&1
+  limactl shell --tty=false "$target" sudo rm -rf /var/lib/pgsql/data >/dev/null 2>&1
+  limactl shell --tty=false "$target" sudo install -d -o postgres -g postgres -m 0700 \
+    /var/lib/pgsql/data >/dev/null 2>&1
+  limactl shell --tty=false "$target" sudo systemctl start percona-patroni >/dev/null 2>&1
+  local back=""
+  for i in $(seq 1 60); do
+    sleep 5
+    state="$(jq -r --arg m "$member" '.[] | select(.Member == $m) | .State' <<< "$(patroni_json)" 2>/dev/null)"
+    [[ "$state" == "streaming" ]] && { back=yes; break; }
+  done
+  [[ -n "$back" ]] \
+    && pass "$member rebuilt itself and is streaming again" \
+    || fail "$member did not return to streaming after the data directory was cleared"
+
+  wait_for_quorum \
+    && pass "one leader and two quorum standbys again" \
+    || fail "the cluster did not return to full redundancy"
+
+  rows_after="$(sql "$(leader_vm)" "select count(*) from public.ha_probe")"
+  (( ${rows_after:-0} >= ${rows_before:-0} )) \
+    && pass "no committed rows were lost (${rows_before} -> ${rows_after}); only the broken node was discarded" \
+    || fail "row count fell ${rows_before} -> ${rows_after}: the rebuild destroyed data it should not have"
+
+  sql "$(leader_vm)" "delete from public.ha_probe where client_name = 'runbook5-drill'" >/dev/null 2>&1
+  echo
+  (( FAIL_COUNT == _fc0 )) && { echo "PASS (rejoin drill)"; return 0; }
+  echo "FAILED (rejoin drill): $((FAIL_COUNT - _fc0)) problem(s)" >&2
+  return 1
+}
+
 # Every drill runs even after one fails, so a single invocation reports
 # everything that is broken rather than only the first thing -- the same
 # convention run-all.sh uses for the checks.
@@ -679,6 +797,7 @@ test_drill() {
   test_drill_switchover || failures=$((failures + 1))
   test_drill_quorum     || failures=$((failures + 1))
   test_drill_wal        || failures=$((failures + 1))
+  test_drill_rejoin     || failures=$((failures + 1))
   echo
   (( failures == 0 )) && { echo "PASS (all drills)"; return 0; }
   echo "FAILED: $failures drill(s)" >&2
@@ -693,6 +812,7 @@ main() {
     switchover) test_drill_switchover ;;
     quorum) test_drill_quorum ;;
     wal) test_drill_wal ;;
+    rejoin) test_drill_rejoin ;;
     drill) test_drill ;;
     all) test_lint || exit 1; test_drill || exit 1 ;;
     *) usage; exit 2 ;;
