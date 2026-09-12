@@ -144,6 +144,16 @@ other_vm() {
 # So a reclaim is reported and accepted. Requiring leadership to MOVE made the
 # check fail on correct behaviour, which is the worst kind of false alarm: it
 # trains you to rerun until green.
+#
+# The branch has been WATCHED FIRING, not merely written. Six ordinary trials
+# produced no reclaim -- survivors win at 32-38s -- so it was forced: both
+# survivors' Patroni held with SIGSTOP before the leader key expired, leaving the
+# rebooting node to take it back uncontested. It reported
+#
+#     Patroni settled on pg1 (reclaimed after being fenced)
+#
+# which is precisely the state that previously failed the check. The normal path
+# still reports "Patroni promoted pg2" and passes.
 fenced_confirmed=0
 node_was_fenced() { (( fenced_confirmed == 1 )); }
 
