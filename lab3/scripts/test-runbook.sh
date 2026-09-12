@@ -787,6 +787,111 @@ test_drill_rejoin() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Runbook 2: failover did not happen.
+#
+# The page's central claim is the one operators find hardest to believe: with
+# `watchdog.mode: required`, a node that cannot arm its watchdog REFUSES TO BE
+# PRIMARY, so a missing softdog module presents as *no leader anywhere* rather
+# than as a warning. Nothing had ever induced it -- the failover tests all run on
+# nodes whose watchdog works, which is the opposite case.
+#
+# Induced by removing the module from both standbys and then killing the primary,
+# leaving a cluster that is fully capable of electing a leader except for the one
+# thing Patroni will not proceed without.
+#
+# This drill deliberately produces a cluster with no primary. The trap restores
+# the module and restarts every node regardless of where it fails.
+test_drill_failover_blocked() {
+  local _fc0=$FAIL_COUNT
+  local leader survivors=() vm i saw_leader log dev
+  echo
+  echo "=== Runbook 2 drill: 'failover did not happen' ==="
+  wait_for_quorum || { fail "cluster was not settled before the drill"; return 1; }
+  leader="$(leader_vm)"
+  for vm in "${VM_NAMES[@]}"; do [[ "$vm" != "$leader" ]] && survivors+=("$vm"); done
+  echo "  leader is ${leader#$VM_PREFIX}; disarming ${survivors[*]#$VM_PREFIX}"
+
+  restore_watchdog() {
+    for vm in "${VM_NAMES[@]}"; do
+      limactl shell --tty=false "$vm" sudo modprobe softdog >/dev/null 2>&1
+      limactl shell --tty=false "$vm" sudo systemctl start percona-patroni >/dev/null 2>&1
+    done
+  }
+  trap restore_watchdog RETURN
+
+  # Take the watchdog away from the only nodes that could be promoted.
+  for vm in "${survivors[@]}"; do
+    limactl shell --tty=false "$vm" sudo rmmod softdog >/dev/null 2>&1
+  done
+  local gone=0
+  for vm in "${survivors[@]}"; do
+    limactl shell --tty=false "$vm" sudo test -e /dev/watchdog || gone=$((gone + 1))
+  done
+  (( gone == 2 )) \
+    && pass "/dev/watchdog is gone on both standbys" \
+    || fail "the watchdog device survived on $((2 - gone)) standby(s); the fault was not set up"
+
+  # Lose the primary.
+  limactl shell --tty=false "$leader" sudo systemctl stop percona-patroni >/dev/null 2>&1
+  limactl shell --tty=false "$leader" sudo -u postgres \
+    "$POSTGRES_BIN_DIR/pg_ctl" -D /var/lib/pgsql/data -w -t 60 stop -m immediate >/dev/null 2>&1
+
+  # ttl is 30s. Give the election every chance to happen, then assert it did not.
+  saw_leader=""
+  for i in $(seq 1 18); do
+    sleep 5
+    [[ "$(leader_vm)" != "$VM_PREFIX" ]] && { saw_leader="$(leader_vm)"; break; }
+  done
+  [[ -z "$saw_leader" ]] \
+    && pass "no leader was elected in 90s: the cluster refused to promote, which is the documented symptom" \
+    || fail "${saw_leader#$VM_PREFIX} was promoted without a watchdog; watchdog.mode=required is not being honoured"
+
+  # The diagnosis the runbook sends you to.
+  log="$(limactl shell --tty=false "${survivors[0]}" \
+    sudo journalctl -u percona-patroni -n 60 --no-pager 2>/dev/null)"
+  grep -qi "watchdog" <<< "$log" \
+    && pass "journalctl on a survivor names the watchdog, as the runbook's table says it will: $(grep -oiE 'watchdog[^\"]{0,58}' <<< "$log" | tail -1)" \
+    || fail "nothing in the journal points at the watchdog; the documented diagnosis would not find this"
+
+  # And the check that distinguishes this from runbook 4: the DCS is fine, so an
+  # operator who stopped at "no leader" would be looking in the wrong place.
+  grep -qiE "maintenance mode: on" <<< "$(patronictl_on "${survivors[0]}" list 2>&1)" \
+    && fail "the cluster is paused; this drill induced the wrong incident" \
+    || pass "the cluster is not paused and etcd is healthy: only the watchdog is missing"
+
+  # Fix, exactly as the runbook prints it.
+  echo "  restoring the module, as the runbook's last two commands do"
+  for vm in "${survivors[@]}"; do
+    limactl shell --tty=false "$vm" sudo modprobe softdog >/dev/null 2>&1
+  done
+  sleep 3
+  dev="$(limactl shell --tty=false "${survivors[0]}" sudo stat -c '%U %a' /dev/watchdog 2>/dev/null)"
+  [[ "$dev" == "postgres 600" ]] \
+    && pass "/dev/watchdog is back, owned by postgres: udev reapplied the rule, so no chown is needed" \
+    || fail "the device came back as '${dev:-absent}'; the runbook's fix is incomplete without restoring ownership"
+
+  local promoted=""
+  for i in $(seq 1 24); do
+    sleep 5
+    [[ "$(leader_vm)" != "$VM_PREFIX" ]] && { promoted="$(leader_vm)"; break; }
+  done
+  [[ -n "$promoted" ]] \
+    && pass "${promoted#$VM_PREFIX} was promoted once it could arm a watchdog, with no further intervention" \
+    || fail "still no leader after restoring the watchdog"
+
+  limactl shell --tty=false "$leader" sudo systemctl start percona-patroni >/dev/null 2>&1
+  wait_for_quorum \
+    && pass "one leader and two quorum standbys again" \
+    || fail "the cluster did not return to full redundancy"
+
+  trap - RETURN
+  echo
+  (( FAIL_COUNT == _fc0 )) && { echo "PASS (blocked-failover drill)"; return 0; }
+  echo "FAILED (blocked-failover drill): $((FAIL_COUNT - _fc0)) problem(s)" >&2
+  return 1
+}
+
 # Every drill runs even after one fails, so a single invocation reports
 # everything that is broken rather than only the first thing -- the same
 # convention run-all.sh uses for the checks.
@@ -798,6 +903,7 @@ test_drill() {
   test_drill_quorum     || failures=$((failures + 1))
   test_drill_wal        || failures=$((failures + 1))
   test_drill_rejoin     || failures=$((failures + 1))
+  test_drill_failover_blocked || failures=$((failures + 1))
   echo
   (( failures == 0 )) && { echo "PASS (all drills)"; return 0; }
   echo "FAILED: $failures drill(s)" >&2
@@ -813,6 +919,7 @@ main() {
     quorum) test_drill_quorum ;;
     wal) test_drill_wal ;;
     rejoin) test_drill_rejoin ;;
+    blocked) test_drill_failover_blocked ;;
     drill) test_drill ;;
     all) test_lint || exit 1; test_drill || exit 1 ;;
     *) usage; exit 2 ;;

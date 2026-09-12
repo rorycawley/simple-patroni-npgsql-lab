@@ -236,8 +236,11 @@ sudo -u postgres patronictl -c /etc/patroni/patroni.yml edit-config --force \
 
 # 2. Failover did not happen
 
-**Status: REASONED** — the diagnosis is the one `diagnose_election` performs in
-the failover tests; the causes below have each been seen while building the labs.
+**Status: VERIFIED** — `make test_runbook` removes the `softdog` module from
+both standbys and then kills the primary, which is the one case the failover
+tests cannot cover: they run on nodes whose watchdog works. Measured — **no
+leader for 90 seconds**, with etcd healthy and the cluster unpaused, and
+promotion happening by itself the moment the module came back.
 
 ## Symptom
 
@@ -272,6 +275,22 @@ leader anywhere*, not as a warning.
 lsmod | grep softdog || sudo modprobe softdog
 ls -l /dev/watchdog
 ```
+
+The line to grep for on a survivor is **`Watchdog device is not usable`**:
+
+```sh
+sudo journalctl -u percona-patroni | grep -i watchdog
+```
+
+Two things the drill confirmed, both of which save time here:
+
+- **`modprobe` is the whole fix.** The udev rule reapplies `postgres` ownership
+  when the device reappears, so no `chown` is needed — the device returns as
+  `postgres 600` and Patroni promotes within a cycle, unaided.
+- **etcd is healthy and the cluster is not paused.** This incident looks
+  identical to [3](#3-patroni-is-paused-and-nobody-remembers) and
+  [4](#4-etcd-has-lost-quorum) from `patronictl list` alone — no `Leader` row —
+  which is why the table above checks those two first and this one third.
 
 ---
 
