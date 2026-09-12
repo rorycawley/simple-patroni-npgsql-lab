@@ -68,6 +68,68 @@ prometheus.scrape "alloy" {
   job_name        = "alloy"
 }
 
+// ---------------------------------------------------------------------------
+// Patroni and etcd, both mutually authenticated.
+//
+// Alloy holds a clientAuth-only certificate of its own. It is NOT patroni's:
+// that identity also serves the REST API, and handing it to an agent would make
+// a monitoring compromise a cluster compromise. GET is cert-only, while the
+// unsafe verbs additionally require restapi.authentication -- which this agent
+// does not have, and that is the line worth keeping.
+prometheus.scrape "patroni" {
+  targets = [{
+    __address__ = "{{ lab5_node_ip }}:8008",
+    node        = "{{ inventory_hostname }}",
+  }]
+  scheme          = "https"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.stack.receiver]
+  scrape_interval = "15s"
+  job_name        = "patroni"
+
+  tls_config {
+    ca_file   = "{{ lab5_pki_dir }}/ca.crt"
+    cert_file = "{{ lab5_pki_dir }}/alloy.crt"
+    key_file  = "{{ lab5_pki_dir }}/alloy.key"
+    // No server_name: these are scraped by IP, and the server certificates carry
+    // IP:<node> in their SANs, so verification succeeds on the address used.
+  }
+}
+
+prometheus.scrape "etcd" {
+  targets = [{
+    __address__ = "{{ lab5_node_ip }}:2379",
+    node        = "{{ inventory_hostname }}",
+  }]
+  scheme          = "https"
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.stack.receiver]
+  scrape_interval = "15s"
+  job_name        = "etcd"
+
+  tls_config {
+    ca_file   = "{{ lab5_pki_dir }}/ca.crt"
+    cert_file = "{{ lab5_pki_dir }}/alloy.crt"
+    key_file  = "{{ lab5_pki_dir }}/alloy.key"
+    // No server_name: these are scraped by IP, and the server certificates carry
+    // IP:<node> in their SANs, so verification succeeds on the address used.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PostgreSQL. Connects over the local socket as a dedicated read-only role, so
+// no password travels and no network path is opened for it.
+prometheus.exporter.postgres "db" {
+  data_source_names = ["postgresql:///postgres?host=/var/run/postgresql&user={{ lab5_monitor_role }}&sslmode=disable"]
+}
+
+prometheus.scrape "postgres" {
+  targets         = prometheus.exporter.postgres.db.targets
+  forward_to      = [prometheus.remote_write.stack.receiver]
+  scrape_interval = "15s"
+  job_name        = "postgres"
+}
+
 prometheus.remote_write "stack" {
   endpoint {
     url = "http://{{ lab5_host_gateway_ip }}:{{ lab5_mimir_port }}/api/v1/push"

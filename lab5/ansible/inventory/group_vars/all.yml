@@ -42,6 +42,10 @@ lab5_repo_region: us-east-1
 # pushes to these; nothing here is scraped from outside.
 lab5_loki_port: 3100
 lab5_mimir_port: 9009
+
+# The metrics role. pg_monitor is a built-in role granting read access to the
+# statistics views and nothing else -- it cannot read table data.
+lab5_monitor_role: lab5_monitor
 lab5_repo_uri_style: path
 
 # The backup job. Installed on all three nodes; the leader gate decides which

@@ -129,7 +129,7 @@ is visibly in MinIO rather than in a container, and every node ships something.
 > version is a fork that collides with a port belonging to a lab that IS running,
 > and quietly writes into its repository.
 
-### P1 — Everything is observable, and absence is visible
+### P1 — Everything is observable, and absence is visible — **done**
 
 **What.** Metrics from Patroni, etcd, PostgreSQL, the node, and pgBackRest.
 **How.** Patroni and etcd expose their own; `postgres_exporter` and
@@ -138,6 +138,25 @@ is visibly in MinIO rather than in a container, and every node ships something.
 **Done when.** All five are present, and **stopping one is detected as absence
 rather than read as zero** — which is the same distinction as a check that passes
 on an empty result.
+
+> **Done.** All five report on all three nodes, each confirmed by a metric only
+> that source produces -- `patroni_primary`, `etcd_server_has_leader`, `pg_up`,
+> `node_filesystem_avail_bytes`, `alloy_build_info` -- rather than by `up`, which
+> says only that a scrape succeeded. Stopping etcd on one node drops healthy
+> targets 3 -> 2 and reports `up == 0`, a failed scrape, not a vanished series.
+>
+> **It exposed a security hole first.** Scraping Patroni and etcd needs a client
+> certificate, and `verify_client: required` turned out to be authentication
+> rather than authorisation: the etcd certificate reached `POST /switchover` and
+> was refused only on its body (412), not its credential. Giving the agent a
+> certificate would have made a monitoring compromise a cluster compromise.
+> Closed with `restapi.authentication`, which protects the unsafe verbs only, so
+> GET /metrics stays cert-only. Alloy then gets its own clientAuth-only identity
+> -- not patroni's, which also serves the REST API.
+>
+> PostgreSQL is scraped over the local socket as a `pg_monitor` role mapped from
+> the `alloy` OS user by `pg_ident`, the same pattern the dump job uses: a
+> password that does not exist cannot leak.
 
 ### P2 — The two failures that never heal themselves
 

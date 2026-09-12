@@ -26,6 +26,26 @@
     name: alloy
     state: present
 
+# Installed HERE, not by tls_material, because that role runs before this one and
+# the `alloy` user does not exist until the package above is installed. A role
+# that owns its own identity is also easier to reason about than one whose
+# credentials appear from somewhere earlier in the play.
+- name: Install Alloy's client certificate
+  ansible.builtin.copy:
+    src: "{{ lab5_pki_source }}/{{ lab5_node_name }}-alloy.{{ item.ext }}"
+    dest: "{{ lab5_pki_dir }}/alloy.{{ item.ext }}"
+    owner: alloy
+    group: alloy
+    mode: "{{ item.mode }}"
+  loop:
+    - { ext: crt, mode: "0644" }
+    - { ext: key, mode: "0600" }
+  loop_control:
+    label: "alloy.{{ item.ext }}"
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
 - name: Configure Alloy
   ansible.builtin.template:
     src: config.alloy.j2

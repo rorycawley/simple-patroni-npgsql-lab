@@ -25,6 +25,21 @@ $do$;
 ALTER ROLE dumper WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
 GRANT pg_read_all_data TO dumper;
 
+-- The metrics role. pg_monitor grants the statistics views and nothing else: it
+-- cannot read a single row of application data, which is the difference between
+-- observing a database and having a copy of it.
+DO $do$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ lab5_monitor_role }}') THEN
+    CREATE ROLE {{ lab5_monitor_role }} LOGIN;
+  END IF;
+END
+$do$;
+
+ALTER ROLE {{ lab5_monitor_role }} WITH
+  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+GRANT pg_monitor TO {{ lab5_monitor_role }};
+
 SELECT 'CREATE DATABASE appdb OWNER postgres'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'appdb')\gexec
 

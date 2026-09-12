@@ -71,6 +71,10 @@ postgresql:
     # An ident map rather than a password: a secret that does not exist cannot
     # leak, and nothing outside this socket can use the mapping.
     - local appdb dumper peer map=dumpmap
+    # The metrics agent, by the same reasoning: the alloy OS user is mapped onto a
+    # pg_monitor role over the local socket. No password exists to leak, and
+    # nothing off this machine can use the mapping.
+    - local postgres {{ lab5_monitor_role }} peer map=monmap
     - local all all peer
     - hostssl all all 127.0.0.1/32 scram-sha-256
     - hostssl replication replicator 127.0.0.1/32 scram-sha-256
@@ -83,3 +87,4 @@ postgresql:
 {% endfor %}
   pg_ident:
     - dumpmap postgres dumper
+    - monmap alloy {{ lab5_monitor_role }}

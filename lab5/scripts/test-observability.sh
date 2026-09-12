@@ -90,6 +90,62 @@ done
   || fail "$LOKI_BUCKET holds only seed data; logs are not reaching the object store"
 
 echo
+echo "=== AC-1: every component is observable ==="
+# A distinctive metric per source, not just "the target is up". `up` only says a
+# scrape succeeded; these say the thing on the other end is the component it
+# claims to be.
+promq() {
+  curl -s --max-time 10 -G "$MIMIR/prometheus/api/v1/query" \
+    --data-urlencode "query=$1" 2>/dev/null | jq -r '.data.result[0].value[1] // "0"'
+}
+for probe in "patroni_primary:Patroni" "etcd_server_has_leader:etcd" \
+             "pg_up:PostgreSQL" "node_filesystem_avail_bytes:the node" \
+             "alloy_build_info:Alloy"; do
+  q="${probe%%:*}"; name="${probe##*:}"
+  n="$(promq "count($q)")"
+  (( ${n%%.*} > 0 )) \
+    && pass "$name is observable: $q has ${n%%.*} series" \
+    || fail "$name reports nothing; $q is absent"
+done
+
+echo
+echo "=== AC-1: a source that stops is visible as ABSENCE, not read as zero ==="
+# The distinction the whole lab turns on. A stopped source must not look like a
+# healthy one reporting zero -- that is the shape of every silent failure this
+# series has found, from `pgbackrest verify` exiting 0 to a check satisfied by an
+# empty bucket.
+etcd_victim="${VM_NAMES[1]}"
+before="$(promq "count(up{job=\"etcd\"} == 1)")"
+on "$etcd_victim" sudo systemctl stop etcd >/dev/null 2>&1
+absent=""
+for _ in $(seq 1 20); do
+  sleep 6
+  now="$(promq "count(up{job=\"etcd\"} == 1)")"
+  (( ${now%%.*} < ${before%%.*} )) && { absent=yes; break; }
+done
+[[ -n "$absent" ]] \
+  && pass "stopping etcd on ${etcd_victim#$VM_PREFIX} dropped healthy targets ${before%%.*} -> ${now%%.*}" \
+  || fail "etcd stopped on ${etcd_victim#$VM_PREFIX} and the metrics did not change; the outage is invisible"
+
+# And it is reported as a FAILED scrape rather than simply vanishing: a target
+# that disappears entirely is silence, which is AC-5's problem, not this one.
+down="$(promq "count(up{job=\"etcd\"} == 0)")"
+(( ${down%%.*} > 0 )) \
+  && pass "and it shows as up==0, a failed scrape, not as a missing series" \
+  || fail "the stopped source vanished instead of reporting up==0"
+
+on "$etcd_victim" sudo systemctl start etcd >/dev/null 2>&1
+restored=""
+for _ in $(seq 1 20); do
+  sleep 6
+  now="$(promq "count(up{job=\"etcd\"} == 1)")"
+  (( ${now%%.*} >= ${before%%.*} )) && { restored=yes; break; }
+done
+[[ -n "$restored" ]] \
+  && pass "etcd restarted and the target recovered on its own" \
+  || fail "etcd did not return to being scraped"
+
+echo
 echo "=== Telemetry cannot reach the backup repository ==="
 # The coupling accepted in the design is one object store. It is not one
 # identity, and this is the assertion that keeps those separate.

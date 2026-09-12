@@ -10,6 +10,7 @@ set -euo pipefail
 #   <node>-etcd         serverAuth, clientAuth  etcd client and peer APIs
 #   <node>-patroni      serverAuth, clientAuth  Patroni REST API
 #   <node>-dcs-client   clientAuth              Patroni's own client to etcd
+#   <node>-alloy        clientAuth              The monitoring agent, read-only
 #   minio               serverAuth              The backup object store (Lab 5)
 #
 # minio is not per-node: one object store on the control machine serves every
@@ -100,6 +101,11 @@ for index in "${!NODE_NAMES[@]}"; do
   sign_cert "${node}-etcd"       "${node}.${DOMAIN}" "$san" "serverAuth,clientAuth"
   sign_cert "${node}-patroni"    "${node}.${DOMAIN}" "$san" "serverAuth,clientAuth"
   sign_cert "${node}-dcs-client" "${node}-dcs-client" "DNS:${node}.${DOMAIN}" "clientAuth"
+  # clientAuth ONLY, and it serves nothing. The monitoring agent needs to READ
+  # Patroni's and etcd's metrics endpoints, which are mutually authenticated, and
+  # nothing more. Giving it patroni's certificate would have handed it an
+  # identity that also serves the REST API.
+  sign_cert "${node}-alloy"      "${node}-alloy"      "DNS:${node}.${DOMAIN}" "clientAuth"
 done
 
 # The object store lives on the control machine, reached at the Lima shared
