@@ -151,7 +151,7 @@ on "$after_leader" sudo -u postgres pgbackrest --stanza="$STANZA" check >/dev/nu
   && pass "pgbackrest check passes on the new primary" \
   || fail "pgbackrest check fails on the new primary"
 
-on "$after_leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
+"$SCRIPT_DIR/repo-verify.sh" "$after_leader" "$STANZA" >/dev/null 2>&1 \
   && pass "the archive verifies across the promotion: no gap, no corruption" \
   || fail "verify failed after the promotion; the WAL sequence is not intact"
 

@@ -118,7 +118,7 @@ final="$(repo_json)"
 min="$(jq -r '.[0].archive[-1].min' <<< "$final")"
 max="$(jq -r '.[0].archive[-1].max' <<< "$final")"
 echo "  archive runs $min -> $max"
-on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
+"$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1 \
   && pass "pgbackrest verify passes: the history is intact and continuous" \
   || fail "verify failed; the history has a hole in it"
 

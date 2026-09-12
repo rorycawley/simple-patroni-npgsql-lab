@@ -55,6 +55,14 @@ failures=0
 pass() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
+# AC-7: the run emits its own cost, so the ladder's table cannot drift from what
+# was actually measured. One file per rung, read back by ladder-cost.sh.
+record_cost() {
+  local dir="$LAB_DIR/.costs"
+  mkdir -p "$dir"
+  printf '%s|%s|%s|%s\n' "${2:-?}" "${3:-?}" "${4:-?}" "${5:-}" > "$dir/rung$1"
+}
+
 secret() { sed -n "s/^$1: \"\\(.*\\)\"$/\\1/p" "$CLUSTER_SECRETS" 2>/dev/null; }
 
 # `timeout` inside the guest, because patronictl BLOCKS on an unreachable DCS
@@ -118,7 +126,7 @@ if (( DRY_RUN )); then
   # Each of these uses a surviving input rather than checking it is present. A
   # passphrase that exists and does not decrypt is worth nothing, and the only
   # way to know the difference is to decrypt something with it.
-  on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
+  "$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1 \
     && pass "the repository verifies: every backup and WAL segment decrypts and checksums" \
     || fail "the repository does not verify; a rebuild from it would not be trustworthy"
 
@@ -441,6 +449,7 @@ echo
 echo "  rung 6 cost: ${restore_elapsed}s restore + ${replay_elapsed}s replay,"
 echo "               ${total_elapsed}s from destruction to a redundant cluster,"
 echo "               0 rows lost, and nothing survived but the repository and one passphrase"
+record_cost 6 "$total_elapsed" 0 "$total_elapsed" "rebuilt from the repository onto fresh machines after total loss"
 echo
 rm -f "$STATE"
 (( failures == 0 )) && { echo "PASS"; exit 0; }

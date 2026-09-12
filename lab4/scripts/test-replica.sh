@@ -32,6 +32,14 @@ failures=0
 pass() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
+# AC-7: the run emits its own cost, so the ladder's table cannot drift from what
+# was actually measured. One file per rung, read back by ladder-cost.sh.
+record_cost() {
+  local dir="$LAB_DIR/.costs"
+  mkdir -p "$dir"
+  printf '%s|%s|%s|%s\n' "${2:-?}" "${3:-?}" "${4:-?}" "${5:-}" > "$dir/rung$1"
+}
+
 
 patroni_json() {
   local out vm
@@ -180,12 +188,13 @@ rows_after="$(on "$(leader_vm)" sudo -u postgres "$PGBIN/psql" -d appdb -Atc \
   || fail "row count changed across the rebuild: $rows_before -> $rows_after"
 
 # The repository must be no worse for having been read.
-on "$(leader_vm)" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
+"$SCRIPT_DIR/repo-verify.sh" "$(leader_vm)" "$STANZA" >/dev/null 2>&1 \
   && pass "the repository still verifies after being used as a source" \
   || fail "verify failed after the rebuild"
 
 echo
 echo "  rung 1 cost: ${elapsed}s, 0 rows, no load on the primary"
+record_cost 1 "$elapsed" 0 0 "rebuilt one node from the repository; the primary served none of it"
 echo
 (( failures == 0 )) && { echo "PASS"; exit 0; }
 echo "FAILED: $failures problem(s)" >&2

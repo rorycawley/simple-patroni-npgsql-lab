@@ -457,12 +457,70 @@ its own data directory.
 Fix what that reports, then let PostgreSQL recycle normally. Space is reclaimed
 once the backlog archives successfully.
 
+## Checking the repository: exit codes are not the answer
+
+**Status: VERIFIED** — measured in [Lab 4](lab4/README.md) by corrupting a real
+repository object.
+
+Two pgBackRest commands report success on a repository that is not healthy, so
+neither can be used as a pass/fail gate in a script or a cron job:
+
+| Command | On a damaged repository |
+| --- | --- |
+| `info` | **Exits 0.** It lists what is there; it does not read it. It exits 0 even on a repository it cannot decrypt at all |
+| `verify` | **Exits 0.** It finds the damage, prints it, and still returns success |
+
+With one archived WAL segment overwritten in place, `verify` reported:
+
+```
+INFO: invalid result 18-1/...0000006A-....gz: unexpected eof in compressed data
+INFO: stanza: lab4
+      status: error
+        archiveId: 18-1, total WAL checked: 6, total valid WAL: 5
+INFO: verify command end: completed successfully (15256ms)
+```
+
+…and exited **0**. The verdict is in the output, not the status. Check for
+`status: error` and `invalid result`:
+
+```sh
+out="$(sudo -u postgres pgbackrest --stanza=<cluster> verify 2>&1)"
+grep -qiE 'status: *error|invalid result|invalid file' <<< "$out" && echo DAMAGED
+```
+
+A clean run prints no counts at any log level, so absence of those markers is the
+only positive signal available.
+
+## A wrong cipher passphrase looks like an empty repository
+
+**Status: VERIFIED.** This is the trap most likely to destroy backups during an
+incident. Restoring with the wrong `repo1-cipher-pass` reports:
+
+```
+WARN: unable to load info file '.../backup.info' or '.../backup.info.copy':
+      FormatError: key/value found outside of section at line 1: b6)E...
+      HINT: has a stanza-create been performed?
+ERROR: [075]: no backup set found to restore
+```
+
+The headline error says there are **no backups**, and the hint suggests running
+`stanza-create`. Both are wrong, and acting on the hint against a repository that
+is merely locked is how a working set of backups gets destroyed.
+
+- The evidence is the `WARN`, not the `ERROR`. At `--log-level-console=error` you
+  see only the misleading half.
+- Before you conclude a repository is empty, **check the passphrase you supplied**.
+- `repo1-cipher-pass` is refused on the command line. Supply it in the config or
+  as `PGBACKREST_REPO1_CIPHER_PASS`.
+
 ## Do not
 
 - **Never delete files from `pg_wal` by hand.** Removing an unarchived segment
   destroys the ability to recover to any point after it, and removing one still
   needed for recovery corrupts the cluster. If space is critical, move the
   archive destination, not the WAL.
+- **Never run `stanza-create` to "fix" a repository that reports no backups**
+  until you have ruled out a wrong passphrase — see above.
 
 ---
 

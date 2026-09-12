@@ -130,6 +130,8 @@ main() {
   run_phase "Rung 3: a copy restored beside a cluster that keeps serving" test_beside optional
   run_phase "Rung 4: one table back from a dump, nothing else moved" test_table optional
   run_phase "Rung 5: rewind the cluster to an exact boundary" test_rewind optional
+  run_phase "Recovery fails closed: wrong key, impossible target, tampered object" test_fails_closed optional
+  run_phase "The ladder's cost, in time and in rows, emitted by this run" ladder_cost optional
   run_phase "Backup chain: it verifies, and retention expires dependents" test_chain optional
   run_phase "Logical dumps: encrypted, readable, and they reload" test_dump optional
   run_phase "Encryption: every object needs its passphrase, both prefixes" test_encryption optional

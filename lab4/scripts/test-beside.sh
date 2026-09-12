@@ -40,6 +40,14 @@ failures=0
 pass() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
+# AC-7: the run emits its own cost, so the ladder's table cannot drift from what
+# was actually measured. One file per rung, read back by ladder-cost.sh.
+record_cost() {
+  local dir="$LAB_DIR/.costs"
+  mkdir -p "$dir"
+  printf '%s|%s|%s|%s\n' "${2:-?}" "${3:-?}" "${4:-?}" "${5:-}" > "$dir/rung$1"
+}
+
 
 patroni_json() {
   local out vm
@@ -190,7 +198,7 @@ echo
 echo "=== And the repository is no worse for it (R3) ==="
 on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" check >/dev/null 2>&1 \
   && pass "pgbackrest check still passes" || fail "check failed after the restore"
-on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
+"$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1 \
   && pass "the repository still verifies: the copy archived nothing into it" \
   || fail "verify failed; the copy polluted the stanza"
 
@@ -200,6 +208,7 @@ echo "  timeline histories in the archive: $timelines"
 
 echo
 echo "  rung 3 cost: ${restore_elapsed}s to a usable copy, 0 rows lost, 0 downtime"
+record_cost 3 "$restore_elapsed" 0 0 "restored a copy beside production, which never stopped serving"
 echo
 (( failures == 0 )) && { echo "PASS"; exit 0; }
 echo "FAILED: $failures problem(s)" >&2

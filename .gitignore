@@ -48,3 +48,4 @@ publish/
 # Rung 6 records what must survive the teardown, across it
 .rung6-state
 .rung6-prepare.log
+.costs/

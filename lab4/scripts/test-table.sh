@@ -36,6 +36,14 @@ failures=0
 pass() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
+# AC-7: the run emits its own cost, so the ladder's table cannot drift from what
+# was actually measured. One file per rung, read back by ladder-cost.sh.
+record_cost() {
+  local dir="$LAB_DIR/.costs"
+  mkdir -p "$dir"
+  printf '%s|%s|%s|%s\n' "${2:-?}" "${3:-?}" "${4:-?}" "${5:-}" > "$dir/rung$1"
+}
+
 
 patroni_json() {
   local out vm
@@ -166,7 +174,7 @@ probe_total="$(sql "select count(*) from public.ha_probe")"
 
 echo
 echo "=== The cluster and the repository are unaffected ==="
-on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1 \
+"$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1 \
   && pass "the repository still verifies" || fail "verify failed"
 states="$(sql "select string_agg(sync_state, ',' order by application_name) from pg_stat_replication")"
 [[ "$states" == "quorum,quorum" ]] \
@@ -175,6 +183,7 @@ states="$(sql "select string_agg(sync_state, ',' order by application_name) from
 
 echo
 echo "  rung 4 cost: ${elapsed}s, 5 rows lost (all in the damaged table), 0 downtime"
+record_cost 4 "$elapsed" "$post_dump" 0 "one table back from a dump; the loss is confined to that table"
 echo
 (( failures == 0 )) && { echo "PASS"; exit 0; }
 echo "FAILED: $failures problem(s)" >&2

@@ -54,6 +54,14 @@ failures=0
 pass() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
+# AC-7: the run emits its own cost, so the ladder's table cannot drift from what
+# was actually measured. One file per rung, read back by ladder-cost.sh.
+record_cost() {
+  local dir="$LAB_DIR/.costs"
+  mkdir -p "$dir"
+  printf '%s|%s|%s|%s\n' "${2:-?}" "${3:-?}" "${4:-?}" "${5:-}" > "$dir/rung$1"
+}
+
 
 patroni_json() {
   local out vm
@@ -342,6 +350,7 @@ echo
 echo "  rung 5 cost: ${downtime}s before the cluster could serve again,"
 echo "               ${elapsed}s before it was redundant again,"
 echo "               $after_count committed transactions discarded, both standbys rebuilt"
+record_cost 5 "$elapsed" "$after_count" "$downtime" "rewound the whole cluster to a marker; everything after it was discarded"
 echo
 (( failures == 0 )) && { echo "PASS"; exit 0; }
 echo "FAILED: $failures problem(s)" >&2

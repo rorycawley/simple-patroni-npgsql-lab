@@ -85,7 +85,7 @@ echo "  leader is ${leader#$VM_PREFIX}"
 
 echo
 echo "=== The repository verifies before anything is changed ==="
-if on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1; then
+if "$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1; then
   pass "pgbackrest verify passes across the whole repository"
 else
   fail "pgbackrest verify failed on the existing repository"
@@ -149,7 +149,7 @@ done <<< "$remaining"
 
 echo
 echo "=== And it still verifies after expiry ==="
-if on "$leader" sudo -u postgres pgbackrest --stanza="$STANZA" verify >/dev/null 2>&1; then
+if "$SCRIPT_DIR/repo-verify.sh" "$leader" "$STANZA" >/dev/null 2>&1; then
   pass "pgbackrest verify passes after retention ran"
 else
   fail "pgbackrest verify failed after expiry; the repository is inconsistent"
