@@ -1,0 +1,46 @@
+DO $do$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_runtime') THEN
+    CREATE ROLE app_runtime LOGIN;
+  END IF;
+END
+$do$;
+
+ALTER ROLE app_runtime WITH
+  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  PASSWORD '{{ app_runtime_password }}';
+
+-- The logical dump connects as this role, not as a superuser. Note
+-- pg_read_all_data rather than SELECT grants: a dump taken by a role that
+-- merely holds SELECT on today's tables silently omits anything it cannot
+-- read, producing a backup that restores cleanly and is incomplete.
+DO $do$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dumper') THEN
+    CREATE ROLE dumper LOGIN;
+  END IF;
+END
+$do$;
+
+ALTER ROLE dumper WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+GRANT pg_read_all_data TO dumper;
+
+SELECT 'CREATE DATABASE appdb OWNER postgres'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'appdb')\gexec
+
+REVOKE CONNECT ON DATABASE appdb FROM PUBLIC;
+GRANT CONNECT ON DATABASE appdb TO app_runtime;
+GRANT CONNECT ON DATABASE appdb TO dumper;
+
+\connect appdb
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO app_runtime;
+
+CREATE TABLE IF NOT EXISTS public.ha_probe (
+  probe_id text PRIMARY KEY,
+  client_name text NOT NULL,
+  server_address inet NOT NULL DEFAULT inet_server_addr(),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+GRANT SELECT, INSERT ON public.ha_probe TO app_runtime;

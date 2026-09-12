@@ -117,8 +117,21 @@ design, and Lab 5 should answer it honestly rather than assume the logs are ther
 
 The LGTM stack runs on the control machine, not in more VMs — the same reasoning
 that puts MinIO there for Lab 3, and that ruled out a Tang server in Lab 2.
-Grafana's `otel-lgtm` image bundles Grafana, Mimir, Loki and Tempo in one
-container, reachable from the guests at the Lima shared-network gateway.
+Grafana, Mimir and Loki run there, reachable from the guests at the Lima
+shared-network gateway. **Mimir and Loki keep their data in MinIO** — `lab5-mimir`
+and `lab5-loki` — which is how they are run anywhere that matters, and which the
+lab can afford because the object store, its TLS and its scoped credentials
+already exist.
+
+Prometheus is not used: it writes a local TSDB and has no S3 backend, so
+S3-backed metrics means Mimir. Tempo is not built at all, because traces are
+deferred until the .NET client is instrumented, and storage nothing writes to is
+not worth configuring.
+
+The cost of that choice is stated rather than hidden: backups and telemetry now
+share one object store. A MinIO outage stops the backups *and* blinds the
+monitoring that should report it. Separate buckets and separate credentials limit
+the blast radius; only a separate instance would remove it.
 
 ## Acceptance criteria
 

@@ -1,0 +1,34 @@
+---
+# Patroni reads patroni.yml at startup and on SIGHUP. Writing the file is not
+# enough: until this runs, the file on disk and the configuration the process is
+# using disagree, silently.
+#
+# This went unnoticed until Lab 5 changed create_replica_methods -- the first
+# LOCAL Patroni setting this series alters after bootstrap. Everything before it
+# lived in the DCS, which patronictl edit-config applies to the running cluster,
+# so a missing reload never showed.
+#
+# Serialised by `serial` on the play, so the leader is never reloaded alongside
+# its standbys. A reload does not restart PostgreSQL or move the leader.
+# `state: reloaded` STARTS a stopped unit. That is not a reload, and on a machine
+# being prepared for a restore it is destructive: rung 6 rebuilds fresh nodes and
+# deliberately does not bootstrap, because Patroni's default is initdb and a new
+# cluster carries a new system identifier that the surviving pgBackRest stanza
+# will not recognise. This handler fired on the new patroni.yml, started Patroni
+# on all three nodes, and each one bootstrapped an empty cluster over the top of
+# the machines meant to receive the restore.
+#
+# The repository refused their backups -- a stanza belongs to one database -- so
+# nothing was lost. The check is still needed: reload what is running, and leave
+# what is stopped alone.
+- name: Check whether Patroni is already running
+  ansible.builtin.command: systemctl is-active --quiet percona-patroni
+  register: lab5_patroni_running
+  failed_when: false
+  changed_when: false
+
+- name: Reload Patroni
+  ansible.builtin.systemd:
+    name: percona-patroni
+    state: reloaded
+  when: lab5_patroni_running.rc == 0

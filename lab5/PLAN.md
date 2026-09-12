@@ -54,7 +54,9 @@ None of them are assumptions.
 | **Alloy on every node**, shipping metrics and logs | One agent, two signals, and it is what the design already names | Another service per node to install and keep running |
 | **A local webhook receiver as the alert destination** | Proving an alert *fires* is easy; proving it *arrives* is the part that is usually skipped, and AC-5 asks for it. A receiver in the lab makes arrival assertable without email or a pager vendor | It proves delivery to a local endpoint, not to a phone at 03:00. Stated as a gap |
 | **A custom pgBackRest exporter**, not a shell wrapper around `verify` | Forced by the findings above: the exit codes are useless, so the exporter must parse output and expose `repo_verify_ok`, `last_backup_age_seconds`, and `archive_backlog_segments` | Custom code to maintain, and it must itself be tested against a *corrupted* repository |
-| **Tempo and traces deferred** | They only earn their place once the .NET client is instrumented, which is real work outside this lab's question | A failover stays invisible from the client's side. Recorded as deferred, not dropped |
+| **Telemetry is stored in MinIO**, one bucket per store: `lab5-loki` and `lab5-mimir` | Decided by the owner. It is how these components are run in production — none of them keep data on local disk at scale — and the lab already has the hard parts: TLS, a private CA the guests trust, and a scoped-credential pattern | **Coupling, accepted knowingly.** The backups and the telemetry now share one object store, so a MinIO outage stops backups *and* blinds the monitoring meant to notice, with the alert unable to be written. Separate buckets and credentials limit blast radius but do not remove it. The production form is a separate instance |
+| **Mimir, not Prometheus** | Forced by the decision above: Prometheus writes a local TSDB and has no S3 backend, so S3-backed metrics means Mimir | More configuration than the bundled demo image provides, so the components are run explicitly rather than as one prepackaged container |
+| **Tempo and traces deferred — and therefore not built** | They only earn their place once the .NET client is instrumented, which is real work outside this lab's question | A failover stays invisible from the client's side. No Tempo, and no third bucket: storage nobody writes to is not worth configuring |
 | **Every alert ships with a positive control** | The dominant lesson of Labs 3 and 4: thirteen checks could not fail, and the drill harness printed `FAIL` while reporting `PASS`. An alert nobody has watched fire is not monitoring | Roughly doubles the work per alert, and is the reason to do this lab at all |
 
 ## Phases
@@ -71,16 +73,61 @@ None of them are assumptions.
 
 ### P0 — Fork Lab 4, stand up LGTM and Alloy
 
-**What.** `lab5/` becomes a working copy of Lab 4, renamed, plus the LGTM stack on
-the control machine and Alloy on each node.
-**How.** Copy `lab4/`, rename, new stanza and bucket. A `make observability_start`
-target mirroring `minio_start`, so the stack is managed the same way.
-**Done when.** `make all` is green from scratch, the stack answers, and every node
-is shipping something.
+**What.** `lab5/` becomes a working copy of Lab 4, renamed, plus Grafana, Mimir
+and Loki on the control machine and Alloy on each node.
+**How.** Copy `lab4/`, rename, new stanza and bucket. A `scripts/observability.sh`
+with `start`/`stop`/`status`/`destroy`, mirroring `minio.sh` so the stack is
+managed the way the object store already is.
+
+Storage is MinIO, two buckets:
+
+| Bucket | Holds | Written by |
+| --- | --- | --- |
+| `lab5-mimir` | metrics | Mimir |
+| `lab5-loki` | logs | Loki |
+
+**Its own credential, not the backup key.** The coupling accepted above is one
+object store; it does not have to be one identity. A telemetry key scoped to
+these two buckets means a compromised or exhausted monitoring stack cannot touch
+the backup repository, which is the part of the blast radius that can still be
+limited.
+
+**Done when.** `make all` is green from scratch, both stores answer, their data
+is visibly in MinIO rather than in a container, and every node ships something.
+
+> Reachability is settled, not assumed: MinIO binds all interfaces, so the guests
+> reach it at the Lima gateway as they already do for backups, and the containers
+> reach it at `host.docker.internal`. The direction still to prove is Alloy on a
+> guest reaching a published container port at the gateway address.
 
 > The one thing to get right here is that the stack must not be a dependency of
 > the cluster. If Alloy being down can stop PostgreSQL, the lab has made
 > availability worse in the name of watching it.
+>
+> **A fork copies code, never secrets.** `.secrets/`, `.recovery-inputs/`,
+> `.minio/`, `.env` and `.costs/` are excluded deliberately: copying
+> `.recovery-inputs/` would leave two labs sharing `repo_cipher_pass` *and* the
+> object store's access key, and nothing would fail. Different buckets and ports
+> mean both labs keep working while having quietly become one failure domain —
+> the same "losing one loses both" property the design rejects for the dump and
+> repository passphrases.
+>
+> The independence check cannot catch this. It scans executables for another
+> lab's *name*, and a copied secret leaves no name anywhere. The guard is the
+> fork procedure: copy `ansible`, `client`, `scripts`, the `Makefile`, the VM
+> template and `.env.example` — nothing that begins with a dot except that one.
+>
+> **And rename what is not a name.** A `lab4` → `lab5` substitution catches the
+> stanza, the bucket, the VM names and the paths, and misses every identifier
+> that is a NUMBER. This fork shipped with `lab5_repo_port: 9200` — Lab 4's port
+> — so the nodes were configured to reach an object store that was not running
+> while their own sat idle on 9300:
+>
+>     ERROR: [049]: unable to connect to '192.168.105.1:9200': Connection refused
+>
+> It failed loudly at `stanza-create`, which is the good case. The dangerous
+> version is a fork that collides with a port belonging to a lab that IS running,
+> and quietly writes into its repository.
 
 ### P1 — Everything is observable, and absence is visible
 
