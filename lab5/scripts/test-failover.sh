@@ -129,6 +129,24 @@ other_vm() {
   return 1
 }
 
+# Waits for the cluster to settle on ONE leader -- not for a particular node to
+# win. Those are different claims, and only the first is guaranteed.
+#
+# The safety property fencing provides is that a frozen primary is reset and the
+# cluster converges on a single leader with no split brain. WHICH node ends up
+# leading is a race: softdog resets the frozen node at ttl - safety_margin (25s)
+# and the leader key expires at ttl (30s), so a survivor usually promotes at
+# 32-38s -- measured across six trials -- but the fenced node can reboot and
+# reclaim the free lock first. That happened once in a full run, and this check
+# reported it as "a new Patroni leader was not elected" when the cluster was in
+# fact healthy and correctly fenced.
+#
+# So a reclaim is reported and accepted. Requiring leadership to MOVE made the
+# check fail on correct behaviour, which is the worst kind of false alarm: it
+# trains you to rerun until green.
+fenced_confirmed=0
+node_was_fenced() { (( fenced_confirmed == 1 )); }
+
 wait_for_new_leader() {
   local survivor="$1" previous_leader="$2" json leader
   for _ in {1..45}; do
@@ -136,6 +154,12 @@ wait_for_new_leader() {
       leader="$(leader_of "$json")"
       if [[ -n "$leader" && "$leader" != "$previous_leader" ]]; then
         printf '%s\n' "$leader"
+        return 0
+      fi
+      # The fenced node is back and holds the lock again. Only legitimate once it
+      # has actually been reset -- which is asserted separately, before this runs.
+      if [[ "$leader" == "$previous_leader" ]] && node_was_fenced; then
+        printf '%s (reclaimed after being fenced)\n' "$leader"
         return 0
       fi
     fi
@@ -272,6 +296,10 @@ confirm_fault() {
         if [[ -n "$current" && "$current" != "$boot_before" ]]; then
           echo "  FENCED: boot id changed $boot_before -> $current"
           echo "  The node reset itself; nothing asked it to."
+          # Set only here, where the reset is OBSERVED. A reclaim is acceptable
+          # solely because the node was genuinely fenced first; without that it
+          # would be indistinguishable from a fence that never happened.
+          fenced_confirmed=1
           frozen_vm=""
           frozen_pid=""
           return 0
@@ -375,11 +403,14 @@ run_scenario() {
   echo "Started the Npgsql client (pid $client_pid)"
 
   new_leader="$(wait_for_new_leader "$survivor" "$initial_leader")" || {
-    echo "A new Patroni leader was not elected" >&2
+    echo "The cluster did not settle on a leader" >&2
     diagnose_election "$survivor"
     return 1
   }
-  echo "Patroni promoted $new_leader"
+  case "$new_leader" in
+    *"reclaimed"*) echo "Patroni settled on $new_leader" ;;
+    *)             echo "Patroni promoted $new_leader" ;;
+  esac
 
   client_status=0
   wait "$client_pid" || client_status=$?
