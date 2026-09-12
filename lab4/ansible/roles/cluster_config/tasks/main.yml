@@ -77,7 +77,14 @@
 
 # notify: the running process must be told, or the file and the behaviour differ.
 - name: Configure Patroni
-  notify: Reload Patroni
+  # BOTH handlers, and the order matters: handlers run in the order they are
+  # DEFINED, so the check runs before the reload that reads its result. Notifying
+  # only the reload leaves `lab4_patroni_running` undefined and fails the play at
+  # the very end of configure.yml -- which is what made this look like an etcd
+  # bootstrap race, because start-etcd.yml then never ran at all.
+  notify:
+    - Check whether Patroni is already running
+    - Reload Patroni
   ansible.builtin.template:
     src: patroni.yml.j2
     dest: /etc/patroni/patroni.yml

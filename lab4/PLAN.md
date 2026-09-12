@@ -322,15 +322,25 @@ replay.
 > exist, so every write blocks, `ALTER ROLE` is a write, and no standby can attach
 > until it completes. Measured as `wait_event = SyncRep`, waiting indefinitely.
 >
-> **Still open:** `make test_total_loss` exits non-zero. etcd's first bootstrap
-> fails on cold VMs, three times out of three, leaving the unit inactive with no
-> journal entries at all -- systemd never attempted the start. `start-etcd.yml`
-> already carries a synchronised re-form and it succeeds on the second attempt, so
-> the run retries once and reports `the rebuild needed a SECOND attempt` rather
-> than passing silently. The cause is not yet known; `rebuild_prepare`'s output is
-> now kept so the next occurrence captures what Ansible said. This is pre-existing
-> rather than new -- only rung 6 creates genuinely fresh VMs, so nothing in this
-> series had exercised etcd's cold bootstrap before.
+> **The "etcd cold-boot bug" did not exist.** Three rung-6 runs failed at
+> `rebuild_prepare` with etcd stopped and NO journal entries, and I attributed it
+> to a flaky first bootstrap on cold VMs. The cause was a handler added during P5:
+> the task notified `Reload Patroni` but not the check it depends on, so
+>
+>     fatal: 'lab4_patroni_running' is undefined
+>
+> failed the play at the END of configure.yml -- and `start-etcd.yml` never ran.
+> etcd had no journal entries because nothing had ever tried to start it, which is
+> exactly what the evidence said and what I read past. The retry "succeeded" only
+> because a second run changes no template and therefore notifies no handler.
+>
+> Fixed by notifying both handlers, and proven under the failing condition by
+> removing patroni.yml so the template changes: both handlers run, 0 failed, etcd
+> active on all three. The retry is gone and the failure is fatal again.
+>
+> The lesson is the one this lab keeps relearning: "no journal entries" meant the
+> service was never started, and I spent three runs looking for a reason it had
+> started and failed.
 
 ### P7 — Fails closed, and the ladder's cost table — **done**
 

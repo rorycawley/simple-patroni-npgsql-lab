@@ -6,10 +6,7 @@
 > that never stopped serving, one table recovered from a dump, the cluster
 > rewound to an exact boundary, and the whole thing destroyed and rebuilt from
 > the repository alone with **0 rows lost**.
->
-> One item remains open and is not hidden: `make test_total_loss` exits non-zero
-> because etcd's first bootstrap fails on cold VMs and needs a second attempt.
-> The recovery itself is unaffected — see P6 in [`PLAN.md`](PLAN.md).
+
 
 The shared components, cluster design and prerequisites are in the
 [top-level README](../README.md). This file covers Lab 4 only: the recovery

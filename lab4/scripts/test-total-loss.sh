@@ -194,31 +194,33 @@ make -C "$LAB_DIR" create_vms >/dev/null 2>&1
 # needed the DCS. A precondition that fails has to stop the run, or the output
 # describes a recovery that cannot finish.
 prepare_log="$LAB_DIR/.rung6-prepare.log"
+# FATAL, not recorded and stepped over. An earlier version treated this as one
+# more failed assertion and carried on: the next twelve minutes printed "ok" for
+# a restore, a promotion and a credential reset that were all genuinely fine, and
+# then hung indefinitely on the first call that needed the DCS.
+#
+# This also used to retry once, on the belief that etcd's first bootstrap was
+# flaky on cold VMs. It is not. The failure was a handler in this lab notifying
+# only "Reload Patroni" and not the check it depends on, which failed the play at
+# the END of configure.yml -- so start-etcd.yml never ran, and etcd was found
+# stopped with no journal entries because nothing had ever tried to start it. The
+# retry "worked" only because a second run changes no template and therefore
+# notifies no handler. Diagnostics are kept; the retry is not.
 if make -C "$LAB_DIR" rebuild_prepare > "$prepare_log" 2>&1; then
   pass "fresh machines prepared: packages, encrypted volumes, TLS, etcd"
 else
-  # etcd's first bootstrap on cold VMs is not reliably green, and start-etcd.yml
-  # already carries a synchronised re-form for it. Run alone against warm
-  # machines the same playbook succeeds every time, so what follows captures WHY
-  # it did not, rather than retrying past it silently.
-  echo "  the first prepare failed; capturing why before retrying" >&2
+  fail "the rebuild did not complete; nothing below it can be trusted"
   echo "  --- what Ansible reported ---" >&2
   grep -iE "^(fatal|failed|ERROR)|msg\":|unreachable" "$prepare_log" 2>/dev/null \
     | tail -8 | cut -c1-200 | sed 's/^/    /' >&2
   for vm in "${VM_NAMES[@]}"; do
     echo "  --- ${vm#$VM_PREFIX} ---" >&2
     on "$vm" sudo bash -c \
-      'systemctl is-active etcd; systemctl --no-pager -l status etcd 2>&1 | sed -n "1,6p";
-       echo "journal:"; journalctl -u etcd --no-pager -n 8 2>&1 | tail -8;
-       echo "member dir: $(ls -A /var/lib/etcd/lab4 2>/dev/null | wc -l) entries";
-       findmnt -n /var/lib/etcd || echo "/var/lib/etcd NOT MOUNTED"' 2>&1 | sed 's/^/    /' >&2
+      'systemctl is-active etcd; journalctl -u etcd --no-pager -n 6 2>&1 | tail -6;
+       echo "member dir: $(ls -A /var/lib/etcd/lab4 2>/dev/null | wc -l) entries"' 2>&1 \
+      | sed 's/^/    /' >&2
   done
-  if make -C "$LAB_DIR" rebuild_prepare >/dev/null 2>&1; then
-    fail "the rebuild needed a SECOND attempt: etcd did not bootstrap first time"
-  else
-    fail "the rebuild did not complete on two attempts; nothing below it can be trusted"
-    exit 1
-  fi
+  exit 1
 fi
 
 # MinIO starts only NOW, and the order is not arbitrary. The teardown deleted
