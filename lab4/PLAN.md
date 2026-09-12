@@ -266,18 +266,32 @@ kept every row written since** — including rows written while the restore ran.
 > keeps committing, and keeping all of it*, is the property that makes this rung
 > cheaper than rewinding — and the only one worth asserting.
 
-### P5 — Rung 5: rewind the cluster, exactly
+### P5 — Rung 5: rewind the cluster, exactly — **done**
 
 **What.** Point-in-time recovery to a marker, on the real cluster.
 **How.** `pg_create_restore_point` plus `pg_switch_wal`, writes on both sides of
 it, then `patronictl pause`, restore to the marker, resume, and rebuild the
 standbys — they hold the future and are not a recovery source.
 **Serves.** AC-4, AC-6, and AC-7's costly half.
+
+> **Done.** The boundary is exact in both directions: all 20 rows before the
+> marker present, all 30 after it absent. Cost: 7s before the cluster served
+> again, 13s before it was redundant, 30 committed transactions discarded.
+>
+> Two defects, both found by running it. **Stopping Patroni is not stopping
+> PostgreSQL** -- the postmaster outlives its unit, so pgBackRest refused with
+> `[038]: unable to restore while PostgreSQL is running` and the orphan then
+> blocked the next start. And **do not stop PostgreSQL before handing the node
+> back**: a paused Patroni does not start it, so the node stays down until the
+> resume, then loses the leader race on a WAL position the DCS recorded before
+> the rewind and returns as a REPLICA -- the rewind correct on disk, the cluster
+> with no primary. Both are in RUNBOOKS.md runbook 9, which is VERIFIED for its
+> restore mechanics as a result.
 **Done when.** Every row before the marker is present, every row after it is
 absent, the cluster is whole again, and **the number of discarded transactions
 is reported**.
 
-### P6 — Rung 6: total loss
+### P6 — Rung 6: total loss — **done**
 
 **What.** The lab's original premise, now the top of a ladder rather than the
 whole of it.
@@ -289,7 +303,36 @@ from the surviving CA for the new addresses.
 client commits through it, and recovery time is reported split into restore and
 replay.
 
-### P7 — Fails closed, and the ladder's cost table
+> **Done, and performed three times.** 2s restore + 0s replay, 450s from
+> destruction to a redundant cluster, **0 rows lost** -- 50 rung-6 rows and 128
+> ha_probe rows back under the original system identifier, with a new CA and new
+> credentials. Patroni adopts the restored primary against an EMPTY DCS, and both
+> standbys rebuild themselves from the repository.
+>
+> The design decision it forced: the **reset path**. The restored roles carry old
+> password hashes, so rather than requiring the old passwords to survive the
+> disaster, the rebuild generates new ones and ALTERs the restored roles to match.
+> What a customer must protect shrinks to a bucket and a passphrase. That exposed
+> a gap -- the object store's OWN credentials lived in `.secrets/`, which the
+> teardown deletes, so rung 6 would have left an intact repository nothing could
+> authenticate to. They are recovery inputs now.
+>
+> The credential reset deadlocks against `synchronous_mode_strict`:
+> `synchronous_standby_names` returns from the backup naming standbys that do not
+> exist, so every write blocks, `ALTER ROLE` is a write, and no standby can attach
+> until it completes. Measured as `wait_event = SyncRep`, waiting indefinitely.
+>
+> **Still open:** `make test_total_loss` exits non-zero. etcd's first bootstrap
+> fails on cold VMs, three times out of three, leaving the unit inactive with no
+> journal entries at all -- systemd never attempted the start. `start-etcd.yml`
+> already carries a synchronised re-form and it succeeds on the second attempt, so
+> the run retries once and reports `the rebuild needed a SECOND attempt` rather
+> than passing silently. The cause is not yet known; `rebuild_prepare`'s output is
+> now kept so the next occurrence captures what Ansible said. This is pre-existing
+> rather than new -- only rung 6 creates genuinely fresh VMs, so nothing in this
+> series had exercised etcd's cold bootstrap before.
+
+### P7 — Fails closed, and the ladder's cost table — **done**
 
 **What.** The negative controls, and the numbers that make the ladder a decision.
 **How.** Three deliberate corruptions: a wrong cipher passphrase, a target
@@ -298,6 +341,24 @@ earlier than the oldest base backup, and one repository object altered with
 **Serves.** AC-7, AC-8.
 **Done when.** All three fail loudly, and the cost table is emitted by the run
 rather than written by hand.
+
+> **Done. Full suite 30 passed, 0 failed.** All three controls refuse and leave
+> the target directory empty. The cost table is emitted from what each rung
+> measured: rung 1 and rung 3 cost nothing, rung 4 costs 5 rows confined to one
+> table, rung 5 costs 30 rows and 7s of downtime.
+>
+> **The finding was not the phase.** Building the tamper control proved that
+> `pgbackrest verify` EXITS 0 ON A CORRUPTED REPOSITORY -- it printed
+> `status: error` and `total valid WAL: 5` of 6 and returned success. Every check
+> shaped `verify && pass || fail` was therefore vacuous, and there were THIRTEEN
+> across Labs 3 and 4, several of them cited as evidence in this plan. Replaced by
+> `repo-verify.sh`, which reads the verdict from the output; AC-8's third control
+> is its positive control, so the checker is watched failing on real corruption
+> rather than merely never complaining.
+>
+> A wrong cipher passphrase also turns out to present as an EMPTY repository,
+> with a HINT suggesting `stanza-create` -- which against a merely-locked
+> repository is how backups get destroyed. Both findings are in RUNBOOKS.md.
 
 ## Risk
 
@@ -368,11 +429,14 @@ lab fills the other half — and it should fill it as a **range across the
 ladder**, not a single number, because that is the honest answer: minutes and no
 data lost at rung 3, hours and a bounded window at rung 6.
 
-[`RUNBOOKS.md`](../RUNBOOKS.md) gains the most from this lab. Runbook 10 is
-currently a **stub** that says not to follow it, and runbook 9's restore
-commands are **REASONED**. Both become VERIFIED here, and the
-[decision table](../RUNBOOKS.md#which-recovery-do-you-need) stops being advice
-and starts being a summary of measured results.
+[`RUNBOOKS.md`](../RUNBOOKS.md) gained the most from this lab. Runbook 10 was a
+**stub** that said not to follow it and is now **VERIFIED**, carrying the
+procedure as performed along with every trap the runs hit; runbook 9's restore
+commands moved from **REASONED** to VERIFIED for their mechanics. Two new
+VERIFIED sections record what neither was looking for: that `pgbackrest verify`
+exits 0 on a corrupted repository, and that a wrong cipher passphrase presents as
+an empty one. The [decision table](../RUNBOOKS.md#which-recovery-do-you-need) has
+stopped being advice and is now a summary of measured results.
 
 That table is also the reason this lab took rung 4 from Lab 8. A ladder is only
 useful if its rungs are comparable, and they are only comparable if one run

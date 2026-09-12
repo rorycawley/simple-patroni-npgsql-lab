@@ -14,8 +14,8 @@ It produces two things, and everything here serves one of them.
 
 | Deliverable | What it is | Where it lives | How far along |
 | --- | --- | --- | --- |
-| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 3 of 8 built, 1 in progress |
-| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 3 drilled, 6 reasoned, 1 stub |
+| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 4 of 8 built |
+| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 5 drilled, 5 reasoned, no stubs left |
 
 Each stage is a lab: a self-contained cluster that builds from nothing with two
 commands and tests its own claims with executable checks. The labs are the
@@ -32,7 +32,7 @@ point of the exercise.
 | [1](lab1/README.md) | The cluster, the client, failover, fencing, quorum commit | **Built and verified** |
 | [2](lab2/README.md) | Every Lab 1 guarantee, now on LUKS2 volumes — PostgreSQL and etcd on separate devices — with TLS on every channel, mutual where the peer is a machine | **Built and verified** |
 | [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **Built and verified** |
-| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | **In progress** — rungs 1, 3, 4 and 5 verified (AC-1 to AC-4). Total loss and the fails-closed controls are not built |
+| [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | **Built and verified** — all eight criteria, including recovery from total loss and the three fails-closed controls |
 | [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | Specified |
 | [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
 | [7](lab7/README.md) | Schema migration with Flyway — no downtime, and what survives a failover mid-migration | Specified |
@@ -161,7 +161,7 @@ needs that they do not have — the list this proof of concept exists to produce
 | **Fault domains** | Three VMs on one machine | Three independent domains. No single domain may hold two of the three nodes — [`SLA.md`](SLA.md#fault-domains-must-the-nodes-be-on-separate-hypervisors) |
 | **Fencing** | `softdog`, a kernel timer | A hardware or hypervisor watchdog. `softdog` cannot fire during a kernel panic, because the timer that would fire it has stopped too |
 | **Backup repository** | Off-host and encrypted as of Lab 3, but a **single** MinIO | A second repository. One is a single point of failure for every recovery you might ever attempt |
-| **Restore** | Rehearsed for four blast radii in [Lab 4](lab4/README.md), but only on demand — and total loss is still unproven | A restore rehearsed on a schedule, not on the day it is needed |
+| **Restore** | Rehearsed at five blast radii in [Lab 4](lab4/README.md), up to and including total loss — but only on demand | A restore rehearsed on a schedule, not on the day it is needed |
 | **Secrets** | Generated into an uncommitted `.secrets/`; superuser and replication passwords sit in cleartext in `patroni.yml` | A secrets manager, with each workload fetching at start — [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) |
 | **PKI** | A private CA issuing certificates at build time | Issuance, rotation, revocation, and expiry monitoring. Expiry is the one outage that is entirely preventable by watching a number |
 | **Disk encryption keys** | A root-only keyfile on the node itself | KMS, TPM or network-bound unlock. Today a stolen *disk* is safe and a stolen *node* is not |

@@ -289,7 +289,7 @@ Two ways forward, and they are the two this series keeps separate:
 | You want | Do |
 | --- | --- |
 | A fresh lab; the old backups no longer matter | `make minio_destroy && make all` |
-| The data back | Restore from the repository — [Lab 4](../lab4/README.md), not built |
+| The data back | Restore from the repository — [Lab 4](../lab4/README.md), built and verified |
 
 `make minio_destroy` is the only command here that deletes a backup. Nothing
 else does, on purpose.

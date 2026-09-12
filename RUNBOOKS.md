@@ -791,17 +791,93 @@ losing it. An off-host repository arrives in [Lab 3](lab3/README.md).
 
 # 10. Total loss — every node gone
 
-**Status: STUB. Do not follow this yet.**
+**Status: VERIFIED** — [Lab 4](lab4/README.md) destroys all three nodes, their
+encrypted volumes and every local secret, then rebuilds from the repository
+alone. Measured: **2s restore, 0s replay, 450s from destruction to a redundant
+three-node cluster, 0 rows lost.** Those seconds are not representative; the
+database is small. The *shape* is.
 
-The procedure depends on machinery that is not built: an off-host repository
-([Lab 3](lab3/README.md)) and a rehearsed restore ([Lab 4](lab4/README.md)).
-Writing confident steps for an untested restore is the exact failure this
-repository exists to avoid.
+## What has to survive
 
-What is already known, from [Lab 4](lab4/README.md)'s recovery inventory, is what
-must survive the disaster for any procedure to be possible at all: the
-repository, `repo1-cipher-pass`, the CA key, the superuser and replication
-passwords, the stanza name — and the procedure itself.
+Shorter than you would expect, and deliberately so:
+
+| Must survive | Why |
+| --- | --- |
+| The repository | There is nothing else to restore from |
+| `repo1-cipher-pass` | Every backup is unreadable without it — permanently |
+| The object store's access credentials | An intact repository nothing can authenticate to is the same as no repository |
+| The stanza name | You have the data and cannot address it |
+| This procedure | Everything above exists and nobody knows the order |
+
+**The CA key, the superuser password and the replication password do NOT need to
+survive.** The rebuilt cluster issues a new CA and generates new credentials, and
+step 5 resets the restored roles to match. That is the whole reason to prefer
+this route: what a customer must protect through a disaster is a bucket and a
+passphrase, not a collection of secrets that die with the machines.
+
+## Do it
+
+```sh
+# 1. Fresh machines, and NO database. See the first trap below.
+#    Bring up the object store and confirm the nodes can reach it BEFORE restoring.
+sudo -u postgres pgbackrest --stanza=<cluster> info      # must list your backups
+
+# 2. Restore onto ONE node.
+sudo -u postgres pgbackrest --stanza=<cluster> restore
+
+# 3. Finish recovery under pg_ctl and watch it promote. LEAVE IT RUNNING.
+sudo -u postgres /usr/pgsql-18/bin/pg_ctl -D /var/lib/pgsql/data -w -t 600 start
+sudo -u postgres /usr/pgsql-18/bin/psql -Atc "select pg_is_in_recovery()"   # wait for 'f'
+
+# 4. Confirm it is the database you lost, not a new one.
+sudo -u postgres /usr/pgsql-18/bin/pg_controldata /var/lib/pgsql/data | grep 'system identifier'
+
+# 5. Reset the restored roles. Sync commit must be suspended first — see below.
+sudo -u postgres /usr/pgsql-18/bin/psql --no-psqlrc -Atc \
+  "alter system set synchronous_standby_names = ''"
+sudo -u postgres /usr/pgsql-18/bin/psql --no-psqlrc -Atc "select pg_reload_conf()"
+sudo -u postgres /usr/pgsql-18/bin/psql --no-psqlrc -Atc \
+  "alter role postgres with password '<new>'"
+sudo -u postgres /usr/pgsql-18/bin/psql --no-psqlrc -Atc \
+  "alter role replicator with password '<new>'"
+sudo -u postgres /usr/pgsql-18/bin/psql --no-psqlrc -Atc \
+  "alter system reset synchronous_standby_names"
+sudo -u postgres /usr/pgsql-18/bin/psql --no-psqlrc -Atc "select pg_reload_conf()"
+
+# 6. Hand the RUNNING primary to Patroni; it adopts it and takes the leader lock.
+sudo systemctl enable --now percona-patroni
+
+# 7. Then the standbys — each builds itself from the repository.
+sudo systemctl enable --now percona-patroni     # on each remaining node
+
+# 8. Restart scheduled backups and take a fresh full backup.
+sudo -u postgres pgbackrest --stanza=<cluster> --type=full backup
+```
+
+## The traps, all of them measured
+
+- **Do not let anything bootstrap a database on the fresh machines.** Patroni's
+  default is `initdb`, and a new cluster carries a new system identifier — which
+  a pgBackRest stanza, bound to one database by that identifier, will not
+  recognise. The surviving backups become unreadable by the very cluster meant to
+  restore them. Prepare the machines with Patroni **stopped**, and check
+  `/var/lib/pgsql/data` is empty on every node before step 2.
+- **The object store must be reachable before you restore.** If its TLS
+  certificate was reissued with the rebuilt PKI, start it only after the new
+  certificates exist. A repository that is merely unreachable reports
+  `[075]: no backup set found to restore` — identical to having no backups.
+- **The credential reset deadlocks against `synchronous_mode_strict`.**
+  `synchronous_standby_names` comes back *from the backup* naming standbys that do
+  not exist yet, so every write blocks; `ALTER ROLE` is a write; and no standby
+  can attach until that password is reset. Observed as `wait_event = SyncRep`,
+  waiting indefinitely. Hence suspending it in step 5 — and `RESET` rather than
+  leaving it cleared, because `postgresql.auto.conf` outranks Patroni's own
+  management of that setting for the life of the cluster.
+- **Leave PostgreSQL running at step 6.** A paused or freshly-started Patroni
+  handed a *stopped* data directory has to decide what the node is; handed a
+  running primary it adopts it. See [9](#9-undo-a-change-that-was-committed-and-later-found-to-be-wrong).
+- **Take the backup in step 8.** Until you do, every backup in the repository
+  predates the disaster and the cluster has no recovery point of its own.
 
 ---
 

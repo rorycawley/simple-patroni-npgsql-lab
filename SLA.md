@@ -129,9 +129,9 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
 | Planned switchover | **0** | ~2s to move the leader | n/a — scheduled | measured, n = 1 |
 | Every standby lost at once | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
-| Corruption, deletion, bad migration | **≤ 60s**, bounded by `archive_timeout` — not by backup age | **depends on the instrument** — see below | **not established** | RPO measured in [Lab 3](lab3/README.md); RTO awaits [Lab 4](lab4/README.md) |
+| Corruption, deletion, bad migration | **≤ 60s**, bounded by `archive_timeout` — not by backup age | **0s to ~7s of downtime**, by rung — see below | **not established** | both measured; RPO in [Lab 3](lab3/README.md), RTO in [Lab 4](lab4/README.md) |
 
-### The last row's RPO is now measured; its RTO is not
+### The last row, measured at both ends
 
 Half of that row was filled in by [Lab 3](lab3/README.md), and the distinction it
 turns on is the one most often got wrong:
@@ -145,6 +145,28 @@ last segment that reached the repository. So the window is bounded by
 real figure: a transaction committed immediately after a promotion was archived
 off-host in **1s** when a segment switch was forced. The 60s is the worst case
 for an idle cluster that has not filled a segment, not the expected one.
+
+#### The RTO is a range, because the ladder is a choice
+
+[Lab 4](lab4/README.md) measured each rung against a real cluster. There is no
+single RTO for "corruption" — what it costs depends on which rung the damage
+actually calls for, and reaching for a heavier one than necessary is the
+expensive mistake:
+
+| Rung | What it recovers | Downtime | Committed rows lost |
+| --- | --- | --- | --- |
+| 1 | Replace one lost node | none | 0 |
+| 3 | Restore a copy beside a live cluster | **none** | **0** |
+| 4 | Restore one table from a dump | none | writes to that table since the dump |
+| 5 | Rewind the cluster to a point in time | ~7s | **everything committed after the target** |
+| 6 | Rebuild everything after total loss | ~450s to redundancy | 0, given the repository survived |
+
+The **seconds are not transferable** — this database holds a few thousand rows
+and restores faster than the cluster settles. The **rows** column is, because it
+follows from what each rung does rather than from how much data it moves. Rung 3
+costs nothing and rung 5 discards every transaction since the target; that
+difference holds at any size, and it is why the runbook orders the options by
+cost rather than by power.
 
 Two conditions that bound is contingent on, both asserted by that check: the
 archive must be **off the database hosts**, which it now is, and it must survive

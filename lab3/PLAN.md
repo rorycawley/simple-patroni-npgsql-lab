@@ -490,7 +490,7 @@ honest ways out, and they are the two this series already separates:
 | You want | Do |
 | --- | --- |
 | A fresh lab; the old backups are of no further interest | `make minio_destroy`, then `make all` |
-| The data back | Restore from the repository — which is [Lab 4](../lab4/README.md), and is not built |
+| The data back | Restore from the repository — which is [Lab 4](../lab4/README.md), now built and verified |
 
 That is not a limitation to design around. It is the actual choice anyone faces
 when a cluster is gone and its backups are not, and discovering it here rather

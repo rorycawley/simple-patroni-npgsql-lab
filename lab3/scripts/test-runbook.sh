@@ -160,8 +160,12 @@ test_lint() {
     fi
   done
 
+  # Skip flags before the unit name. `systemctl enable --now percona-patroni` is
+  # an ordinary invocation, and taking the third word from it yields '--now' --
+  # which the lint then reported as a missing unit, failing a correct runbook.
   while IFS= read -r line; do units+=("$line"); done < <(runbook_lines \
-    | grep -oE 'systemctl [a-z-]+ [a-z0-9@.-]+' | awk '{print $3}' | sort -u)
+    | grep -oE 'systemctl [a-z-]+( --?[a-z-]+)* [a-z0-9@.-]+' \
+    | awk '{print $NF}' | grep -vE '^-' | sort -u)
   for unit in "${units[@]:-}"; do
     [[ -z "$unit" ]] && continue
     if limactl shell --tty=false "$node" systemctl cat "$unit" >/dev/null 2>&1; then
