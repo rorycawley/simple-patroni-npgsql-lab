@@ -1,0 +1,56 @@
+name: never-heals
+interval: 15s
+rules:
+  # Writes blocked on synchronous replication.
+  #
+  # `ANY 1 (*)` is Patroni's unsatisfiable placeholder and cannot occur on a
+  # healthy cluster, so this has no false-positive mode. `for: 1m` covers the
+  # seconds it legitimately holds that value during a failover.
+  - alert: WritesBlockedOnSyncReplication
+    expr: lab5_sync_unsatisfiable == 1
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "1"
+    annotations:
+      summary: "{{ $labels.node }}: writes are blocked on synchronous replication"
+      description: >-
+        synchronous_standby_names is Patroni's unsatisfiable placeholder, so no
+        commit can be acknowledged. Nothing recovers this on its own.
+        RUNBOOKS.md procedure 1.
+
+  # Archiving has stopped, which is where a backup regime dies quietly.
+  #
+  # Scoped to the primary with patroni_primary: archiving is the primary's
+  # job, and a standby's pg_stat_archiver never moves -- so without this the
+  # alert would fire on every standby forever.
+  #
+  # Rate, not absolute count: the counters are cumulative and survive a role
+  # change, measured in Lab 3 where a standby carried failed_count=4 from
+  # when it was primary.
+  - alert: ArchivingFailing
+    expr: rate(lab5_archiver_failed_count[5m]) > 0 and on(node) patroni_primary == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: WAL archiving is failing"
+      description: >-
+        archive_command is failing, so WAL cannot be recycled and the backup
+        regime has stopped advancing. Begins as a backup problem and ends as
+        an outage. RUNBOOKS.md procedure 6.
+
+  # The same incident seen from the other side: nothing has been archived for
+  # far longer than archive_timeout, which is 60s in this cluster.
+  - alert: NothingArchivedRecently
+    expr: lab5_archiver_seconds_since_archived > 300 and on(node) patroni_primary == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: no WAL archived for over 5 minutes"
+      description: >-
+        archive_timeout is 60s, so a gap this long means archiving is not
+        merely slow. RUNBOOKS.md procedure 6.

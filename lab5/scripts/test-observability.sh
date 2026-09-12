@@ -146,6 +146,22 @@ done
   || fail "etcd did not return to being scraped"
 
 echo
+echo "=== AC-2: the alerts for the two failures that never heal ==="
+# Loaded, and SILENT on a healthy cluster. Both halves matter: an alert that
+# cannot fire is useless, and one that fires constantly gets muted, which is a
+# slower way of having no monitoring at all.
+rules="$(curl -s --max-time 15 "$MIMIR/prometheus/api/v1/rules" 2>/dev/null)"
+for a in WritesBlockedOnSyncReplication ArchivingFailing NothingArchivedRecently; do
+  st="$(jq -r --arg n "$a" '.data.groups[]?.rules[]? | select(.name==$n) | .state' <<< "$rules" 2>/dev/null)"
+  case "$st" in
+    inactive) pass "$a is loaded and silent on a healthy cluster" ;;
+    firing)   fail "$a is FIRING on a cluster the rest of this check calls healthy" ;;
+    "")       fail "$a is not loaded; the failure it covers would go unnoticed" ;;
+    *)        fail "$a is in state '$st'" ;;
+  esac
+done
+
+echo
 echo "=== Telemetry cannot reach the backup repository ==="
 # The coupling accepted in the design is one object store. It is not one
 # identity, and this is the assertion that keeps those separate.

@@ -46,6 +46,17 @@
     - Check whether Alloy is already running
     - Restart Alloy
 
+- name: Install the custom PostgreSQL queries
+  ansible.builtin.copy:
+    src: pg-queries.yaml
+    dest: /etc/alloy/pg-queries.yaml
+    owner: alloy
+    group: alloy
+    mode: "0644"
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
 - name: Configure Alloy
   ansible.builtin.template:
     src: config.alloy.j2

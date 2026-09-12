@@ -158,7 +158,7 @@ on an empty result.
 > the `alloy` OS user by `pg_ident`, the same pattern the dump job uses: a
 > password that does not exist cannot leak.
 
-### P2 — The two failures that never heal themselves
+### P2 — The two failures that never heal themselves — **done**
 
 **What.** The reason this lab exists.
 **How.** Alert on `synchronous_standby_names = 'ANY 1 (*)'` together with
@@ -167,6 +167,37 @@ archive backlog growing.
 **Serves.** AC-2, AC-3 in part.
 **Done when.** Both alerts fire when the corresponding drill runs, **and neither
 fires during a healthy run.**
+
+> **Done, and both watched firing.**
+>
+>     WritesBlockedOnSyncReplication   fired at 130s   node=pg1  runbook=1
+>     ArchivingFailing                 fired at 192s   node=pg1  runbook=6
+>
+> Induced the way the runbooks describe: both standbys taken down for the first,
+> the repository made unreachable for the second. All three rules sit `inactive`
+> on a healthy cluster, which is the other half -- an alert that fires constantly
+> gets muted, a slower way of having no monitoring at all.
+>
+> Neither failure was instrumented by default. postgres_exporter ships 342
+> metrics and none of them cover `pg_stat_archiver` or synchronous-replication
+> state, which is the point: the failures nobody instruments are the ones that
+> need it. Both come from custom queries.
+>
+> Two shapes the findings forced:
+>
+> - **Scoped to the primary** with `and on(node) patroni_primary == 1`. The
+>   archiver query returns three series because `master: true` did not restrict
+>   it, and a standby's counters never move -- so unscoped, the alert would fire
+>   on every standby forever.
+> - **Rate, never absolute count.** The counters are cumulative and survive a
+>   role change; Lab 3 measured a standby carrying `failed_count=4` from when it
+>   was primary.
+>
+> An unplanned result, from inducing the archiving failure by stopping MinIO:
+> **Mimir kept answering with its own storage down.** Recent data lives in the
+> ingester head, so the coupling accepted in the design is survivable for
+> minutes rather than instantly blinding. That is a bound worth knowing and not
+> one that was designed for.
 
 > These are the two failures from the design where nothing throws. Every other
 > fault in the table above is self-healing and already measured; detection

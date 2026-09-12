@@ -269,6 +269,8 @@ do_start() {
     -v "$CONF_DIR/provisioning:/etc/grafana/provisioning:ro" \
     "$GRAFANA_IMAGE" >>"$LOG_FILE" 2>&1
 
+  # Rules are part of the stack, not a manual step. An alert that exists only
+  # because someone remembered to curl it in is not monitoring.
   local i ready=""
   for i in $(seq 1 60); do
     if curl -sf "http://127.0.0.1:${MIMIR_PORT}/ready" >/dev/null 2>&1 \
@@ -278,6 +280,12 @@ do_start() {
     sleep 2
   done
   if [[ -n "$ready" ]]; then
+    if [[ -f "$LAB_DIR/observability/rules/lab5.yaml" ]]; then
+      curl -s --max-time 20 -X POST -H "Content-Type: application/yaml" \
+        --data-binary @"$LAB_DIR/observability/rules/lab5.yaml" \
+        "http://127.0.0.1:${MIMIR_PORT}/prometheus/config/v1/rules/lab5" >/dev/null 2>&1 \
+        && echo "Alert rules loaded"
+    fi
     echo "Monitoring stack up: Grafana $(url_), Mimir :${MIMIR_PORT}, Loki :${LOKI_PORT}"
     echo "Telemetry is stored in MinIO: $MIMIR_BUCKET and $LOKI_BUCKET"
   else

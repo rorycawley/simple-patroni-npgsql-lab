@@ -1,0 +1,61 @@
+# Custom queries for the two failures that never heal themselves.
+#
+# Neither is covered by postgres_exporter's built-in collectors, which is itself
+# the point: the metrics nobody ships by default are the ones these incidents
+# need. Both were measured in Labs 1 and 3 before being alerted on here.
+
+# Writes blocked on synchronous replication.
+#
+# `ANY 1 (*)` is Patroni's unsatisfiable placeholder -- it cannot occur on a
+# healthy cluster, so an alert on it has no false-positive mode. The waiter count
+# is the second half: the placeholder says the cluster CANNOT commit, the waiters
+# say something is actually trying to.
+lab5_sync:
+  query: |
+    SELECT
+      CASE WHEN current_setting('synchronous_standby_names') LIKE '%(*)%'
+           THEN 1 ELSE 0 END                                        AS unsatisfiable,
+      (SELECT count(*) FROM pg_stat_activity
+        WHERE wait_event = 'SyncRep')                               AS waiters,
+      (SELECT count(*) FROM pg_stat_replication
+        WHERE sync_state IN ('sync','quorum'))                      AS confirming_standbys
+  master: true
+  metrics:
+    - unsatisfiable:
+        usage: "GAUGE"
+        description: "1 when synchronous_standby_names is Patroni's unsatisfiable placeholder ANY 1 (*)"
+    - waiters:
+        usage: "GAUGE"
+        description: "Backends blocked in wait_event SyncRep"
+    - confirming_standbys:
+        usage: "GAUGE"
+        description: "Standbys currently able to confirm a commit"
+
+# Archiving, which is where a backup regime dies quietly.
+#
+# Counters are CUMULATIVE and survive a role change -- measured in Lab 3, where a
+# standby carried failed_count=4 from when it was primary. So the alert must use
+# the rate of increase and the recency of last_failed_time, never the absolute
+# count, or it fires forever on any node that has ever had an incident.
+lab5_archiver:
+  query: |
+    SELECT
+      archived_count,
+      failed_count,
+      COALESCE(EXTRACT(EPOCH FROM (now() - last_archived_time)), -1) AS seconds_since_archived,
+      COALESCE(EXTRACT(EPOCH FROM (now() - last_failed_time)),   -1) AS seconds_since_failed
+    FROM pg_stat_archiver
+  master: true
+  metrics:
+    - archived_count:
+        usage: "COUNTER"
+        description: "WAL segments successfully archived"
+    - failed_count:
+        usage: "COUNTER"
+        description: "Failed archive attempts, cumulative and surviving a role change"
+    - seconds_since_archived:
+        usage: "GAUGE"
+        description: "Age of the last successful archive; -1 when none has ever succeeded"
+    - seconds_since_failed:
+        usage: "GAUGE"
+        description: "Age of the last archive failure; -1 when none has ever failed"

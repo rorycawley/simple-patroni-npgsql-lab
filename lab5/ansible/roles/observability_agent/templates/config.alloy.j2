@@ -121,6 +121,9 @@ prometheus.scrape "etcd" {
 // no password travels and no network path is opened for it.
 prometheus.exporter.postgres "db" {
   data_source_names = ["postgresql:///postgres?host=/var/run/postgresql&user={{ lab5_monitor_role }}&sslmode=disable"]
+  // The two failures that never heal themselves are not in the default
+  // collectors. See pg-queries.yaml for why each is shaped the way it is.
+  custom_queries_config_path = "/etc/alloy/pg-queries.yaml"
 }
 
 prometheus.scrape "postgres" {
