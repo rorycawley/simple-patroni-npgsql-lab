@@ -341,7 +341,12 @@ immediately, and Patroni reconciles any drift on its next loop.
 
 # 4. etcd has lost quorum
 
-**Status: REASONED** — the labs isolate a single member, never two.
+**Status: VERIFIED** — `make test_runbook` stops etcd on **two of three** nodes
+and drills this page. Isolating one member is a different incident, which the
+cluster survives; losing the majority is this one. Measured: the leader demoted
+and refused writes with `cannot execute INSERT in a read-only transaction`, and
+Patroni re-acquired the leader key **by itself** once the members were restarted
+— no `--force-new-cluster`, exactly as the "Do not" below requires.
 
 ## Symptom
 
@@ -414,7 +419,18 @@ holding data you have not got elsewhere.
 
 # 6. Disk filling, or WAL accumulating
 
-**Status: REASONED** — not induced by any lab check.
+**Status: VERIFIED** — `make test_runbook` induces it the way it actually
+happens: the repository is made unreachable, so `archive_command` fails. Measured
+on the leader — `failed_count` rose, `last_failed_wal` named the stuck segment,
+**9 segments piled up awaiting archive**, and once the repository returned the
+backlog **drained to zero with no further intervention**. Both traps below were
+confirmed in the same run: the standby reported `failed_count=0` throughout, and
+`pgbackrest check` on that standby failed `[027]`.
+
+> Watch the **archive backlog**, not the file count in `pg_wal`. PostgreSQL
+> preallocates and recycles a pool of segments sized by `min_wal_size`, so that
+> count stays flat while archiving is demonstrably broken — measured at 32 before
+> and after. What accumulates is `pg_wal/archive_status/*.ready`.
 
 ## Why these are the same incident
 
@@ -438,9 +454,15 @@ sudo -u postgres /usr/pgsql-18/bin/psql -Atc \
 A rising `failed_count` with a recent `last_failed_time` is the cause, not a
 symptom of the disk being full.
 
-> On a standby, `pg_stat_archiver` reports zeros whatever is wrong, because with
-> `archive_mode = on` only the primary archives. A standby therefore looks
-> healthy during exactly this incident.
+> On a standby these counters **do not move**, because with `archive_mode = on`
+> only the primary archives. A standby therefore looks healthy during exactly
+> this incident.
+>
+> They are **cumulative and survive a role change**, so a node demoted recently
+> still carries the failures it recorded while it was primary — drilling this
+> found a standby reading `failed_count=4` from an earlier switchover. Judge by
+> whether the count is *rising* and whether `last_failed_time` is recent, never
+> by it being zero.
 
 ## Fix — repair archiving first
 

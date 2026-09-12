@@ -76,7 +76,13 @@ cleanup() {
 trap cleanup EXIT
 
 pass() { echo "  ok: $1"; }
-fail() { echo "  FAIL: $1" >&2; }
+# fail() COUNTS. It used to only print, leaving every caller responsible for
+# incrementing a local counter alongside it -- and two calls in the sync drill
+# did not, so a drill whose documented symptom never occurred still reported
+# PASS. A verdict that depends on remembering a second statement is a verdict
+# that will eventually be wrong.
+FAIL_COUNT=0
+fail() { echo "  FAIL: $1" >&2; FAIL_COUNT=$((FAIL_COUNT + 1)); }
 
 patroni_json() {
   local vm out
@@ -135,6 +141,7 @@ runbook_lines() {
 }
 
 test_lint() {
+  local _fc0=$FAIL_COUNT
   echo
   echo "=== Runbook lint: everything it names exists on ${THIS_LAB} ==="
   local failures=0 node="${VM_NAMES[0]}" path unit user
@@ -193,12 +200,14 @@ test_lint() {
   fi
 
   echo
+  failures=$((FAIL_COUNT - _fc0))
   (( failures == 0 )) && { echo "PASS (lint)"; return 0; }
   echo "FAILED (lint): $failures problem(s)" >&2
   return 1
 }
 
 test_drill_sync() {
+  local _fc0=$FAIL_COUNT
   echo
   echo "=== Runbook 1 drill: 'writes are blocked on synchronous replication' ==="
   local failures=0 primary vm names blocked probe_out probe_rc
@@ -288,6 +297,7 @@ test_drill_sync() {
   pass "cluster restored to one leader and two quorum standbys"
 
   echo
+  failures=$((FAIL_COUNT - _fc0))
   (( failures == 0 )) && { echo "PASS (sync drill)"; return 0; }
   echo "FAILED (sync drill): $failures problem(s)" >&2
   return 1
@@ -299,6 +309,7 @@ test_drill_sync() {
 # the ordinary health signals do not change. A check that only asserted the
 # footer would not establish the thing the runbook warns about.
 test_drill_pause() {
+  local _fc0=$FAIL_COUNT
   echo
   echo "=== Runbook 3 drill: 'Patroni is paused and nobody remembers' ==="
   local failures=0 primary listing
@@ -352,6 +363,7 @@ test_drill_pause() {
   fi
 
   echo
+  failures=$((FAIL_COUNT - _fc0))
   (( failures == 0 )) && { echo "PASS (pause drill)"; return 0; }
   echo "FAILED (pause drill): $failures problem(s)" >&2
   return 1
@@ -362,6 +374,7 @@ test_drill_pause() {
 # also the cheapest way to put a number on planned maintenance, which SLA.md
 # currently records as unmeasured.
 test_drill_switchover() {
+  local _fc0=$FAIL_COUNT
   echo
   echo "=== Runbook 8 drill: 'planned switchover' ==="
   local failures=0 before after target started elapsed vm
@@ -406,6 +419,7 @@ test_drill_switchover() {
   fi
 
   echo
+  failures=$((FAIL_COUNT - _fc0))
   (( failures == 0 )) && { echo "PASS (switchover drill)"; return 0; }
   echo "FAILED (switchover drill): $failures problem(s)" >&2
   return 1
