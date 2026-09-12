@@ -151,7 +151,9 @@ echo "=== AC-2: the alerts for the two failures that never heal ==="
 # cannot fire is useless, and one that fires constantly gets muted, which is a
 # slower way of having no monitoring at all.
 rules="$(curl -s --max-time 15 "$MIMIR/prometheus/api/v1/rules" 2>/dev/null)"
-for a in WritesBlockedOnSyncReplication ArchivingFailing NothingArchivedRecently; do
+for a in WritesBlockedOnSyncReplication ArchivingFailing NothingArchivedRecently \
+         RepositoryDoesNotVerify RepositoryHealthUnreported RepositoryLeaderUndetermined \
+         BackupTooOld ArchiveBacklogGrowing; do
   st="$(jq -r --arg n "$a" '.data.groups[]?.rules[]? | select(.name==$n) | .state' <<< "$rules" 2>/dev/null)"
   case "$st" in
     inactive) pass "$a is loaded and silent on a healthy cluster" ;;
@@ -160,6 +162,27 @@ for a in WritesBlockedOnSyncReplication ArchivingFailing NothingArchivedRecently
     *)        fail "$a is in state '$st'" ;;
   esac
 done
+
+echo
+echo "=== AC-3: the repository is watched for rot, not only for absence ==="
+# verify_ok is read from pgbackrest verify's OUTPUT. Its exit code is 0 on a
+# corrupted repository, so a metric built on the exit code could never be 0 and
+# the alert above it could never fire.
+vok="$(promq "min(lab5_repo_verify_ok)")"
+[[ "$vok" == "1" ]] \
+  && pass "the repository verifies, reported from verify's output rather than its exit code" \
+  || fail "lab5_repo_verify_ok is ${vok:-absent}"
+# Coverage, so "found nothing wrong" cannot be confused with "checked nothing" --
+# the same distinction as a check that passes on an empty result.
+checked="$(promq "max(lab5_repo_wal_checked)")"
+age="$(promq "max(lab5_repo_last_backup_age_seconds)")"
+(( ${age%%.*} >= 0 )) \
+  && pass "the newest backup is ${age%%.*}s old, reported by the node holding the leader key" \
+  || fail "no backup age is being reported"
+leaders="$(promq "count(lab5_repo_metrics_leader == 1)")"
+[[ "${leaders%%.*}" == "1" ]] \
+  && pass "exactly one node reports on the repository, so the alert cannot flap between three" \
+  || fail "${leaders%%.*} nodes claim to be the repository reporter"
 
 echo
 echo "=== Telemetry cannot reach the backup repository ==="

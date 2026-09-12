@@ -203,7 +203,7 @@ fires during a healthy run.**
 > fault in the table above is self-healing and already measured; detection
 > latency barely matters when recovery is automatic. It matters entirely here.
 
-### P3 — Backups that rot, not just backups that stop
+### P3 — Backups that rot, not just backups that stop — **done**
 
 **What.** The half of AC-3 the findings above created.
 **How.** The exporter parses `verify` output for `status: error` and
@@ -212,6 +212,33 @@ object, exactly as Lab 4's AC-8 does.
 **Serves.** AC-3.
 **Done when.** A corrupted object raises an alert, and the run proves it by
 corrupting one and watching the alert fire.
+
+> **Done.** A real repository object was corrupted and the whole chain observed:
+>
+>     detector: lab5_repo_verify_ok 0
+>     coverage: wal_checked 100  wal_valid 99
+>     RepositoryDoesNotVerify  FIRING after 204s
+>
+> The verdict is parsed from `verify`'s OUTPUT. Built on its exit code the metric
+> could never be 0 and the alert could never fire -- a rule that is syntactically
+> valid, visible in the UI, and incapable of matching anything.
+>
+> `wal_checked` and `wal_valid` are exported alongside so "found nothing wrong"
+> cannot be mistaken for "checked nothing", which is the same distinction as a
+> check that passes on an empty result.
+>
+> **The control itself was unreliable, and that is the finding.** Corrupting the
+> MIDDLE of a compressed segment went undetected twice; corrupting near the start
+> was caught immediately. Lab 4's AC-8 control used `seek=$((size/2))` and had
+> simply been lucky. Both labs now corrupt at offset 100. A positive control that
+> fires only sometimes is worse than none: it makes a working detector look
+> broken and teaches you to rerun until it agrees with you.
+>
+> Three rules cover what the repository can do besides rot: nobody reporting on
+> it at all (`absent()`, because silence looks like health), the leader gate
+> being unable to tell, and the newest backup ageing past its threshold. Exactly
+> one node reports repository-wide facts, so the alert cannot flap between three
+> disagreeing views of one repository.
 
 > Absence and corruption are different failures with the same consequence:
 > discovering at restore time that there was nothing to restore from. A

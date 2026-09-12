@@ -54,3 +54,72 @@ rules:
       description: >-
         archive_timeout is 60s, so a gap this long means archiving is not
         merely slow. RUNBOOKS.md procedure 6.
+
+  # AC-3's other half: backups that ROT rather than stop.
+  #
+  # verify_ok is read from pgbackrest verify's OUTPUT, because its exit code is 0
+  # on a corrupted repository -- measured in Lab 4. An alert built on the exit
+  # code would be incapable of firing, which is the failure this whole series
+  # keeps finding.
+  - alert: RepositoryDoesNotVerify
+    expr: lab5_repo_verify_ok == 0
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: the backup repository does not verify"
+      description: >-
+        pgBackRest reported invalid results or status: error. The backups are
+        present and not trustworthy, which is worse than their being absent.
+
+  # Nobody is reporting on the repository at all. Distinct from "the repository
+  # is bad": this is silence, and silence looks exactly like health.
+  - alert: RepositoryHealthUnreported
+    expr: absent(lab5_repo_verify_ok)
+    for: 5m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "No node is reporting repository health"
+      description: >-
+        The metrics writer runs on whichever node holds the leader key. If none
+        is reporting, either no node holds it or the writer is failing on all of
+        them. Absence of a complaint is not the same as a clean bill of health.
+
+  # The leader gate could not determine whether this node should be doing
+  # repository work. Its third exit state exists precisely so this is visible
+  # rather than being silently treated as "not the leader".
+  - alert: RepositoryLeaderUndetermined
+    expr: lab5_repo_metrics_leader == -1
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "2"
+    annotations:
+      summary: "{{ $labels.node }}: cannot tell whether this node is the leader"
+      description: >-
+        Patroni could not be reached to answer it. Treating that as "not the
+        leader" is how every node declines to work and nothing reports an error.
+
+  - alert: BackupTooOld
+    expr: lab5_repo_last_backup_age_seconds > 3600
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: newest backup is over an hour old"
+
+  # The backlog, not the file count in pg_wal: measured in Lab 3, that count
+  # stayed at 32 while archiving was demonstrably broken, because PostgreSQL
+  # recycles a preallocated pool.
+  - alert: ArchiveBacklogGrowing
+    expr: lab5_wal_archive_backlog_segments > 10
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: {{ $value }} WAL segments awaiting archive"

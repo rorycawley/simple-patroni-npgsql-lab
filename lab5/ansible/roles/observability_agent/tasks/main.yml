@@ -46,6 +46,38 @@
     - Check whether Alloy is already running
     - Restart Alloy
 
+- name: Create the textfile collector directory
+  ansible.builtin.file:
+    path: "{{ lab5_textfile_dir }}"
+    state: directory
+    owner: postgres
+    group: alloy
+    mode: "0775"
+
+- name: Install the repository metrics writer
+  ansible.builtin.template:
+    src: lab5-repo-metrics.j2
+    dest: "{{ lab5_backup_bin_dir }}/lab5-repo-metrics"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the repository metrics timer
+  ansible.builtin.template:
+    src: "lab5-repo-metrics.{{ item }}.j2"
+    dest: "/etc/systemd/system/lab5-repo-metrics.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+
+- name: Enable the repository metrics timer
+  ansible.builtin.systemd:
+    name: lab5-repo-metrics.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
 - name: Install the custom PostgreSQL queries
   ansible.builtin.copy:
     src: pg-queries.yaml

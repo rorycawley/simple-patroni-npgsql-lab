@@ -48,7 +48,14 @@ loki.write "stack" {
 //
 // Node metrics first because they are the ones that answer "is the disk filling",
 // which is half of runbook 6 and the failure that ends as an outage.
-prometheus.exporter.unix "node" { }
+prometheus.exporter.unix "node" {
+  // The textfile collector carries the repository metrics. They come from a
+  // timer rather than a scrape because `pgbackrest verify` is not something to
+  // run on every scrape interval, and because the verdict needs parsing.
+  textfile {
+    directory = "{{ lab5_textfile_dir }}"
+  }
+}
 
 prometheus.scrape "node" {
   targets         = prometheus.exporter.unix.node.targets

@@ -46,6 +46,7 @@ lab5_mimir_port: 9009
 # The metrics role. pg_monitor is a built-in role granting read access to the
 # statistics views and nothing else -- it cannot read table data.
 lab5_monitor_role: lab5_monitor
+lab5_textfile_dir: /var/lib/lab5/textfile
 lab5_repo_uri_style: path
 
 # The backup job. Installed on all three nodes; the leader gate decides which

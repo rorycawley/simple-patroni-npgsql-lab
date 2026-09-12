@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Repository health, as metrics.
+#
+# THE REASON THIS EXISTS RATHER THAN A SHELL WRAPPER AROUND `pgbackrest verify`:
+# verify EXITS 0 ON A CORRUPTED REPOSITORY. Measured in Lab 4 with one archived
+# WAL segment overwritten in place --
+#
+#   INFO: invalid result 18-1/...0000006A-....gz: unexpected eof in compressed data
+#   INFO: stanza: lab5   status: error   total WAL checked: 6, total valid WAL: 5
+#   INFO: verify command end: completed successfully      exit code: 0
+#
+# It found the damage, printed it, and returned success. `info` is the same
+# shape: it exits 0 on a repository it cannot even decrypt. So the verdict is
+# taken from the OUTPUT, and the exit code is used only as a secondary signal.
+#
+# A clean verify prints no counts at any log level, so the positive signal is the
+# absence of error markers. That is the weak form of assertion this series
+# distrusts, which is why AC-3's control corrupts a real object and requires this
+# to report it -- a detector nobody has watched fire is worth nothing.
+set -uo pipefail
+STANZA={{ lab5_cluster_name }}
+OUT={{ lab5_textfile_dir }}/pgbackrest.prom
+TMP="${OUT}.$$"
+GATE={{ lab5_backup_bin_dir }}/lab5-leader-gate
+
+emit() { printf '%s\n' "$*" >> "$TMP"; }
+: > "$TMP"
+
+# The archive backlog is node-local and only meaningful where archiving happens,
+# but it is cheap and harmless to report everywhere: on a standby it is 0.
+# Measured in Lab 3: the FILE COUNT in pg_wal does not move when archiving breaks,
+# because PostgreSQL recycles a preallocated pool. What accumulates is .ready.
+backlog=$(ls {{ lab5_postgres_data_dir }}/pg_wal/archive_status/*.ready 2>/dev/null | wc -l | tr -d ' ')
+emit "# HELP lab5_wal_archive_backlog_segments WAL segments written and not yet archived."
+emit "# TYPE lab5_wal_archive_backlog_segments gauge"
+emit "lab5_wal_archive_backlog_segments ${backlog:-0}"
+
+"$GATE" >/dev/null 2>&1
+case $? in
+  0) leader=1 ;;
+  1) leader=0 ;;
+  *) leader=-1 ;;   # could not tell -- reported, never guessed
+esac
+emit "# HELP lab5_repo_metrics_leader 1 leader, 0 not, -1 could not determine."
+emit "# TYPE lab5_repo_metrics_leader gauge"
+emit "lab5_repo_metrics_leader ${leader}"
+
+# Repository-wide facts come from one node, or three nodes disagree about one
+# repository and the alert flaps.
+if (( leader == 1 )); then
+  info="$(pgbackrest --stanza="$STANZA" --output=json info 2>/dev/null)"
+  newest="$(jq -r '[.[0].backup[].timestamp.stop] | max // 0' <<< "$info" 2>/dev/null)"
+  count="$(jq -r '.[0].backup | length // 0' <<< "$info" 2>/dev/null)"
+  now=$(date +%s)
+  age=-1
+  [[ -n "$newest" && "$newest" != "0" && "$newest" != "null" ]] && age=$(( now - newest ))
+
+  emit "# HELP lab5_repo_last_backup_age_seconds Age of the newest backup; -1 when there is none."
+  emit "# TYPE lab5_repo_last_backup_age_seconds gauge"
+  emit "lab5_repo_last_backup_age_seconds ${age}"
+  emit "# HELP lab5_repo_backup_count Backups in the repository."
+  emit "# TYPE lab5_repo_backup_count gauge"
+  emit "lab5_repo_backup_count ${count:-0}"
+
+  # The verdict is in the output. `status: error`, `invalid result`, `invalid
+  # file` and `invalid backup` are what pgBackRest prints when it finds damage.
+  # WARN lines are excluded: a backup running concurrently produces "found in the
+  # repository but not in backup.info", which is transient and not damage.
+  vout="$(pgbackrest --stanza="$STANZA" verify 2>&1)"
+  vrc=$?
+  ok=1
+  grep -qiE 'status: *error|invalid result|invalid file|invalid backup' <<< "$vout" && ok=0
+  grep -q 'verify command end: completed successfully' <<< "$vout" || ok=0
+  (( vrc != 0 )) && ok=0
+  emit "# HELP lab5_repo_verify_ok 1 when the repository verifies. Read from verify's OUTPUT: its exit code is 0 even on a corrupted repository."
+  emit "# TYPE lab5_repo_verify_ok gauge"
+  emit "lab5_repo_verify_ok ${ok}"
+
+  # How much of the archive was actually checked, so a verify that inspected
+  # nothing cannot look like a verify that found nothing wrong.
+  checked="$(grep -oE 'total WAL checked: [0-9]+' <<< "$vout" | tail -1 | grep -oE '[0-9]+' || echo 0)"
+  valid="$(grep -oE 'total valid WAL: [0-9]+' <<< "$vout" | tail -1 | grep -oE '[0-9]+' || echo 0)"
+  emit "# TYPE lab5_repo_wal_checked gauge"
+  emit "lab5_repo_wal_checked ${checked:-0}"
+  emit "# TYPE lab5_repo_wal_valid gauge"
+  emit "lab5_repo_wal_valid ${valid:-0}"
+fi
+
+mv -f "$TMP" "$OUT"

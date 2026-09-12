@@ -195,7 +195,12 @@ size="$(on "$leader" sudo bash -c "stat -c %s /tmp/fc-original.bin 2>/dev/null" 
 # is checksummed.
 on "$leader" sudo bash -c "
   cp /tmp/fc-original.bin /tmp/fc-tampered.bin
-  printf 'CORRUPT!' | dd of=/tmp/fc-tampered.bin bs=1 seek=$((size / 2)) conv=notrunc status=none
+  # Offset 100, not size/2. Measured in Lab 5: corrupting the middle of a
+  # compressed WAL segment was NOT detected by verify on two attempts, while
+  # corrupting near the start was detected immediately. A positive control that
+  # fires only sometimes is worse than none -- it makes a working detector look
+  # broken, and teaches you to rerun until it agrees with you.
+  printf 'CORRUPTCORRUPT' | dd of=/tmp/fc-tampered.bin bs=1 seek=100 conv=notrunc status=none
   $BIN/lab5-s3 put /tmp/fc-tampered.bin '$tampered_key'" >/dev/null 2>&1 \
   && pass "8 bytes rewritten in place, same length as before" \
   || { fail "could not upload the tampered object"; exit 1; }
