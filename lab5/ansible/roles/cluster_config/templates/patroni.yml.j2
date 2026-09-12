@@ -12,6 +12,12 @@ restapi:
   keyfile: {{ lab5_pki_dir }}/patroni.key
   cafile: {{ lab5_pki_dir }}/ca.crt
   verify_client: required
+  # GET stays cert-only, so scraping /metrics needs no password. PUT, POST, PATCH
+  # and DELETE need this as well -- which is the difference between an agent that
+  # can read the cluster and one that can fail it over.
+  authentication:
+    username: patroni
+    password: {{ patroni_restapi_password | to_json }}
 
 # patronictl runs as a client of the REST API above. Without this section every
 # patronictl invocation in the playbooks and test scripts fails the moment

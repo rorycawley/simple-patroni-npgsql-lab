@@ -39,6 +39,14 @@ ensure_secret "$CLUSTER_SECRETS" postgres_superuser_password   "$(openssl rand -
 ensure_secret "$CLUSTER_SECRETS" postgres_replication_password "$(openssl rand -hex 24)"
 ensure_secret "$CLUSTER_SECRETS" app_runtime_password          "$(openssl rand -hex 24)"
 
+# Protects Patroni's UNSAFE REST verbs. verify_client: required is
+# authentication, not authorisation -- measured: the etcd certificate, a wholly
+# different identity, reached POST /switchover and was refused only on the
+# request body (412 "leader name does not match"), not on the credential. Any
+# CA-signed certificate was therefore a Patroni administrator. This password is
+# what separates "may read /metrics" from "may move the primary".
+ensure_secret "$CLUSTER_SECRETS" patroni_restapi_password      "$(openssl rand -hex 24)"
+
 # MinIO gets two identities, for the same reason the database does not run as a
 # superuser. The root credential administers the object store; the nodes get a
 # separate key scoped to the one bucket.
