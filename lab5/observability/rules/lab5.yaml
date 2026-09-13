@@ -206,7 +206,16 @@ rules:
     # The symptom shared by all three causes. Fired alongside ClusterPaused or
     # EtcdQuorumLost it is a consequence; fired ALONE it is the watchdog case --
     # a node that cannot arm softdog refuses to be primary at all.
-    expr: min(patroni_cluster_unlocked) == 1
+    # Counts FRESH reports of a primary, not `min(patroni_cluster_unlocked)`.
+    # That first attempt could never fire: the frozen leader's last published
+    # value was `unlocked=0`, which persists through the query lookback, so the
+    # minimum stayed 0 while the cluster had no leader at all. Third time this
+    # staleness trap has appeared in this lab -- a dead node keeps answering with
+    # whatever it last said.
+    #
+    # `or vector(0)` is not decoration: count() over an empty vector returns NO
+    # SAMPLES, so `count(...) == 0` would never produce a series to alert on.
+    expr: (count((patroni_primary == 1) and (time() - timestamp(patroni_primary) < 90)) or vector(0)) == 0
     for: 2m
     labels:
       severity: critical
@@ -236,3 +245,22 @@ rules:
       runbook: "4"
     annotations:
       summary: "{{ $labels.node }}: has not reached the DCS for over a minute"
+
+  - alert: PatroniNotScrapable
+    # A node whose PATRONI has died, as distinct from one whose PostgreSQL has.
+    # Faults that damage the data directory kill Patroni too -- it reads
+    # pg_control at startup and exits on a cluster-identity mismatch -- and a dead
+    # Patroni serves no /metrics at all, so `patroni_postgres_running` goes ABSENT
+    # rather than 0. Nothing else here would notice: Alloy is still running and
+    # still shipping node metrics, so the node looks alive.
+    expr: up{job="patroni"} == 0
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "5"
+    annotations:
+      summary: "{{ $labels.node }}: Patroni is not answering its metrics endpoint"
+      description: >-
+        The agent on this node is fine, so the node looks alive. Patroni itself is
+        not running -- check the journal for 'system ID mismatch' or a data
+        directory fault. RUNBOOKS.md procedure 5.

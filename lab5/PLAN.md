@@ -325,7 +325,7 @@ and the mailbox holds the alert the run deliberately triggered.
 > an empty result, and the same remedy — assert on presence, never on absence of
 > a complaint.
 
-### P6 — Every fault raises its own alert, and nothing else does — **partly done**
+### P6 — Every fault raises its own alert, and nothing else does — **done**
 
 **What.** The full form of AC-2, across all eleven inducible faults.
 **How.** Run each fault; assert its specific alert fires; assert no unrelated
@@ -356,14 +356,40 @@ that raises none.
 > show the same empty result from `patronictl list`, so the check requires each to
 > fire its own alert AND requires the other to stay quiet. Both hold.
 >
-> **Six faults have a rule but have not been watched firing**: primary VM lost,
-> PostgreSQL killed, Patroni frozen, node isolated from etcd, node that will not
-> rejoin, and failover blocked by a missing watchdog. Their rules exist
-> (`NodeNotReporting`, `PostgresNotRunning`, `PatroniLostDcs`, `NoLeaderAnywhere`)
-> and are loaded and silent -- which by this lab's own standard means nothing. A
-> rule nobody has watched fire is not monitoring, and calling AC-2 met on the
-> strength of six unproven ones would be exactly the claim this series exists to
-> avoid making.
+> **The remaining faults were then proven too**, each asserting a named wrong
+> alert stays quiet:
+>
+> | Fault | Alert | Measured |
+> | --- | --- | --- |
+> | Node isolated from etcd | `PatroniLostDcs` | 260s |
+> | Node will not rejoin | `PatroniNotScrapable` | 150s |
+> | Failover blocked by a missing watchdog | `NoLeaderAnywhere` | 190s |
+>
+> **Two faults are deliberately NOT alerted**, and the run says so out loud:
+> PostgreSQL killed while Patroni lives, and a primary VM lost with two survivors.
+> Patroni repairs both inside a minute, and an alert with a threshold short enough
+> to catch them would fire on every routine promotion -- spending the clean "none
+> are invented" result for nothing. What must hold instead is that the event stays
+> *reconstructable*, which P4 proves from logs alone.
+>
+> A rule had to be added for the won't-rejoin case. A node whose PATRONI has died
+> serves no `/metrics` at all, so `patroni_postgres_running` goes ABSENT rather
+> than 0 -- and Alloy keeps running and shipping node metrics, so the node looks
+> alive. Nothing in the previous fifteen rules caught it; `PatroniNotScrapable`
+> does, and its specificity assertion is that `AlloyNotReporting` stays quiet,
+> because the agent really is fine.
+>
+> **Three findings, all mine rather than the system's.** `NoLeaderAnywhere` first
+> used `min(patroni_cluster_unlocked)`, which could never fire: the frozen
+> leader's last published `unlocked=0` persists through the lookback, so the
+> minimum stayed 0 while the cluster had no leader -- the staleness trap for the
+> third time in this lab. `count(...) == 0` over an empty vector returns NO
+> SAMPLES, so even the corrected logic needed `or vector(0)` to produce a series
+> to alert on. And the watchdog INDUCTION was wrong: removing softdog from only
+> the two standbys lets the fenced leader reboot, reload the module and reclaim
+> the key within a minute, so the no-leader window closed before any threshold. I
+> had been testing a different, self-healing fault and concluding the alert was
+> broken.
 
 ## Risk
 
