@@ -325,7 +325,7 @@ and the mailbox holds the alert the run deliberately triggered.
 > an empty result, and the same remedy — assert on presence, never on absence of
 > a complaint.
 
-### P6 — Every fault raises its own alert, and nothing else does
+### P6 — Every fault raises its own alert, and nothing else does — **partly done**
 
 **What.** The full form of AC-2, across all eleven inducible faults.
 **How.** Run each fault; assert its specific alert fires; assert no unrelated
@@ -336,6 +336,34 @@ that raises none.
 > "And none are invented" is half the criterion. An alerting system that fires
 > three alerts for one fault trains its operators to ignore it, which is a slower
 > way of having no monitoring at all.
+
+> **Partly done, and the gap is stated rather than rounded up.** Fifteen rules are
+> loaded and ALL of them are inactive on a healthy cluster, which is the "none are
+> invented" half in full. Of the eleven faults, **five have had their specific
+> alert watched firing**:
+>
+> | Fault | Alert | Measured |
+> | --- | --- | --- |
+> | Writes blocked on sync replication | `WritesBlockedOnSyncReplication` | 130s |
+> | Archiving broken | `ArchivingFailing` | 192s |
+> | Corrupted repository object | `RepositoryDoesNotVerify` | 204s |
+> | Cluster paused | `ClusterPaused` | 190s |
+> | etcd quorum lost | `EtcdQuorumLost` | 140s |
+>
+> Plus `AlloyNotReporting` at 253s, which serves AC-5 rather than this list.
+>
+> **Specificity is asserted, not assumed.** A paused cluster and a quorum-less one
+> show the same empty result from `patronictl list`, so the check requires each to
+> fire its own alert AND requires the other to stay quiet. Both hold.
+>
+> **Six faults have a rule but have not been watched firing**: primary VM lost,
+> PostgreSQL killed, Patroni frozen, node isolated from etcd, node that will not
+> rejoin, and failover blocked by a missing watchdog. Their rules exist
+> (`NodeNotReporting`, `PostgresNotRunning`, `PatroniLostDcs`, `NoLeaderAnywhere`)
+> and are loaded and silent -- which by this lab's own standard means nothing. A
+> rule nobody has watched fire is not monitoring, and calling AC-2 met on the
+> strength of six unproven ones would be exactly the claim this series exists to
+> avoid making.
 
 ## Risk
 

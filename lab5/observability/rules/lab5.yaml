@@ -168,3 +168,71 @@ rules:
       description: >-
         A node that stops shipping goes quiet, and quiet is indistinguishable
         from healthy unless something counts. This counts.
+
+  # AC-2 in full. "No leader anywhere" has THREE causes that look identical from
+  # patronictl -- paused, etcd quorum lost, and a node unable to arm its watchdog
+  # -- so there are three alerts. One saying "no leader" would send the reader to
+  # a page that cannot tell them which of three procedures to follow.
+
+  - alert: ClusterPaused
+    # Automatic failover is OFF and the cluster looks perfectly healthy. Nothing
+    # else in this lab would notice; runbook 3 exists because someone forgot.
+    expr: max(patroni_is_paused) == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "3"
+    annotations:
+      summary: "Patroni is PAUSED: automatic failover is disabled"
+      description: >-
+        The cluster will not promote anything if the primary dies. It looks
+        healthy because it is healthy -- until it is not.
+
+  - alert: EtcdQuorumLost
+    # Two of three must be running. One survivor cannot form a majority and goes
+    # read-only by design.
+    expr: count(up{job="etcd"} == 1) < 2
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "4"
+    annotations:
+      summary: "etcd has lost quorum: {{ $value }} of 3 members reachable"
+      description: >-
+        Patroni cannot write to the DCS, so the cluster is read-only regardless
+        of how healthy PostgreSQL is.
+
+  - alert: NoLeaderAnywhere
+    # The symptom shared by all three causes. Fired alongside ClusterPaused or
+    # EtcdQuorumLost it is a consequence; fired ALONE it is the watchdog case --
+    # a node that cannot arm softdog refuses to be primary at all.
+    expr: min(patroni_cluster_unlocked) == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "2"
+    annotations:
+      summary: "No node holds the leader key"
+      description: >-
+        If neither ClusterPaused nor EtcdQuorumLost is also firing, suspect the
+        watchdog: grep the journal for 'Watchdog device is not usable'.
+
+  - alert: PostgresNotRunning
+    expr: patroni_postgres_running == 0
+    for: 2m
+    labels:
+      severity: warning
+      runbook: "5"
+    annotations:
+      summary: "{{ $labels.node }}: Patroni reports PostgreSQL is not running"
+
+  - alert: PatroniLostDcs
+    # A node that cannot see etcd demotes itself rather than diverging. That is
+    # correct behaviour and still worth knowing about.
+    expr: time() - max by (node) (patroni_dcs_last_seen) > 60
+    for: 2m
+    labels:
+      severity: warning
+      runbook: "4"
+    annotations:
+      summary: "{{ $labels.node }}: has not reached the DCS for over a minute"
