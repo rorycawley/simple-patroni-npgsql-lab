@@ -39,8 +39,10 @@ readonly GRAFANA_PORT="${LAB5_GRAFANA_PORT:-3000}"
 readonly MIMIR_PORT="${LAB5_MIMIR_PORT:-9009}"
 readonly LOKI_PORT="${LAB5_LOKI_PORT:-3100}"
 readonly MAILPIT_HTTP_PORT="${LAB5_MAILPIT_PORT:-8025}"
+readonly ALERTMANAGER_PORT="${LAB5_ALERTMANAGER_PORT:-9093}"
 
 readonly MIMIR_IMAGE="grafana/mimir:2.14.2"
+readonly ALERTMANAGER_IMAGE="prom/alertmanager:v0.27.0"
 readonly LOKI_IMAGE="grafana/loki:3.3.2"
 readonly GRAFANA_IMAGE="grafana/grafana:11.4.0"
 readonly NET=lab5-observability
@@ -137,13 +139,25 @@ write_configs() {
   # Mimir, monolithic. One bucket with prefixes rather than three buckets: the
   # stores are logically separate and operationally one thing to lose.
   cat > "$CONF_DIR/mimir.yaml" <<MIMIR
-# `all,alertmanager` -- NOT just `all`. Mimir's `all` target deliberately excludes
-# the alertmanager, so with `all` the ruler evaluates rules, marks them firing,
-# tries to deliver them, and logs `Error sending alert` every minute to an
-# endpoint that 404s. Rules looked healthy and nothing was ever delivered, which
-# is precisely the failure AC-5 exists to catch -- found here by reading Mimir's
-# own log, because nothing else reported it.
-target: all,alertmanager
+# Mimir's \`all\` target deliberately EXCLUDES the alertmanager, so the ruler
+# evaluates rules, marks them firing, tries to deliver them, and logs
+# \`Error sending alert\` every minute to an endpoint that 404s. Rules looked
+# healthy and nothing was delivered -- found by reading Mimir's own log.
+#
+# (Backticks here are backslash-escaped on purpose: this heredoc is unquoted so
+# \${MIMIR_PORT} expands, which also means an unescaped \`word\` is run as a
+# command and replaced by its output. That silently ate these comments once.)
+#
+# The first fix was \`all,alertmanager\`, Mimir's built-in alertmanager. That is
+# worse than it looks: measured, it delivers EXACTLY ONE notification after a
+# restart, then fails every later one with
+#   Notify for alerts failed ... invalid service state: Terminated, expected: Running
+# while /services still reports alertmanager=Running and every rule reads firing.
+# Mimir's alertmanager targets multi-tenant SaaS -- per-tenant config upload, a
+# sharding ring, replicated state in S3 -- and none of that earns its keep for one
+# cluster. Alerting runs on a standalone Alertmanager instead: a plain config file,
+# no ring, which is what a Postgres shop actually operates.
+target: all
 multitenancy_enabled: false
 server:
   http_listen_port: ${MIMIR_PORT}
@@ -179,20 +193,11 @@ ruler:
   # NOWHERE. Measured before P5: three alerts had been watched firing and none of
   # them were delivered anywhere, which is a rule that works and monitoring that
   # does not.
-  alertmanager_url: http://127.0.0.1:${MIMIR_PORT}/alertmanager
+  alertmanager_url: http://lab5-alertmanager:9093/
 ruler_storage:
   s3:
     bucket_name: ${MIMIR_BUCKET}
   storage_prefix: ruler
-alertmanager:
-  data_dir: /data/alertmanager
-  external_url: http://127.0.0.1:${MIMIR_PORT}/alertmanager
-  sharding_ring:
-    replication_factor: 1
-alertmanager_storage:
-  s3:
-    bucket_name: ${MIMIR_BUCKET}
-  storage_prefix: alertmanager
 ingester:
   ring:
     replication_factor: 1
@@ -288,6 +293,40 @@ do_start() {
     -p "${MAILPIT_HTTP_PORT}:8025" \
     axllent/mailpit:v1.21 >>"$LOG_FILE" 2>&1
 
+  # Alertmanager is a FILE, not an API call. The previous design uploaded a
+  # per-tenant config into Mimir at startup, so the route existed only because a
+  # curl had succeeded -- and a route that quietly vanishes leaves every rule
+  # green. Mounted, a missing or malformed config stops the container starting,
+  # loudly, instead of accepting alerts and dropping them.
+  cat > "$CONF_DIR/alertmanager.yml" <<'AMCFG'
+route:
+  receiver: lab5-oncall
+  # Without group_by, Alertmanager batches EVERY firing alert into one
+  # notification: measured, a mail arrived with subject `[FIRING:2]` carrying two
+  # unrelated alerts. An operator woken at 3am then has to unpick which fault is
+  # which, and a test cannot tell which alert was delivered. Grouping by alertname
+  # and node gives one fault one mail.
+  group_by: ['alertname', 'node']
+  group_wait: 5s
+  group_interval: 10s
+  repeat_interval: 1h
+receivers:
+  - name: lab5-oncall
+    email_configs:
+      - to: oncall@lab5.example
+        from: alertmanager@lab5.example
+        smarthost: lab5-mailpit:1025
+        require_tls: false
+        send_resolved: true
+AMCFG
+
+  docker_ run -d --name lab5-alertmanager --network "$NET" \
+    -p "${ALERTMANAGER_PORT}:9093" \
+    -v "$CONF_DIR/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+    "$ALERTMANAGER_IMAGE" \
+    --config.file=/etc/alertmanager/alertmanager.yml \
+    --storage.path=/alertmanager >>"$LOG_FILE" 2>&1
+
   docker_ run -d --name lab5-grafana --network "$NET" \
     -p "${GRAFANA_PORT}:3000" \
     -e GF_AUTH_ANONYMOUS_ENABLED=true \
@@ -300,35 +339,17 @@ do_start() {
   # because someone remembered to curl it in is not monitoring.
   local i ready=""
   for i in $(seq 1 60); do
+    # Alertmanager is waited on like the rest. It is the last hop before a human,
+    # so "the stack is up" must not be true while the thing that sends the mail
+    # is still starting.
     if curl -sf "http://127.0.0.1:${MIMIR_PORT}/ready" >/dev/null 2>&1 \
-       && curl -sf "http://127.0.0.1:${LOKI_PORT}/ready" >/dev/null 2>&1; then
+       && curl -sf "http://127.0.0.1:${LOKI_PORT}/ready" >/dev/null 2>&1 \
+       && curl -sf "http://127.0.0.1:${ALERTMANAGER_PORT}/-/ready" >/dev/null 2>&1; then
       ready=yes; break
     fi
     sleep 2
   done
   if [[ -n "$ready" ]]; then
-    # The alertmanager config is per-tenant and must be uploaded; without it a
-    # firing alert reaches an alertmanager with no route and stops there.
-    cat > "$CONF_DIR/alertmanager.yaml" <<'AMCFG'
-alertmanager_config: |
-  route:
-    receiver: lab5-oncall
-    group_wait: 5s
-    group_interval: 10s
-    repeat_interval: 1h
-  receivers:
-    - name: lab5-oncall
-      email_configs:
-        - to: oncall@lab5.example
-          from: alertmanager@lab5.example
-          smarthost: lab5-mailpit:1025
-          require_tls: false
-          send_resolved: true
-AMCFG
-    curl -s --max-time 20 -X POST --data-binary @"$CONF_DIR/alertmanager.yaml" \
-      "http://127.0.0.1:${MIMIR_PORT}/api/v1/alerts" >/dev/null 2>&1 \
-      && echo "Alertmanager route loaded"
-
     if [[ -f "$LAB_DIR/observability/rules/lab5.yaml" ]]; then
       curl -s --max-time 20 -X POST -H "Content-Type: application/yaml" \
         --data-binary @"$LAB_DIR/observability/rules/lab5.yaml" \
@@ -344,7 +365,7 @@ AMCFG
 }
 
 do_stop() {
-  docker_ rm -f lab5-grafana lab5-loki lab5-mimir lab5-mailpit >/dev/null 2>&1
+  docker_ rm -f lab5-grafana lab5-loki lab5-mimir lab5-mailpit lab5-alertmanager >/dev/null 2>&1
   echo "Monitoring stack stopped (telemetry kept in MinIO)"
 }
 

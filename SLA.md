@@ -116,6 +116,49 @@ rather than caveats:
 The opposite choice remains legitimate for a workload that would rather keep
 accepting orders on a single node than stop. It is not this one.
 
+## Detection, which is the first term of any real RTO
+
+Every RTO below is measured from the fault. That is honest for the failures
+Patroni repairs by itself -- nobody has to notice a promotion for it to happen --
+and misleading for the two that never heal, where the clock does not start until
+someone finds out. [Lab 5](lab5/README.md) measures that term:
+
+| What happened | Alert | Detected in |
+| --- | --- | --- |
+| Writes blocked on synchronous replication | `WritesBlockedOnSyncReplication` | **130s** |
+| etcd lost quorum | `EtcdQuorumLost` | **140s** |
+| A node will not rejoin (Patroni dead) | `PatroniNotScrapable` | **150s** |
+| Automatic failover is switched off | `ClusterPaused` | **190s** |
+| Failover blocked by a missing watchdog | `NoLeaderAnywhere` | **190s** |
+| WAL archiving is failing | `ArchivingFailing` | **192s** |
+| A repository object is corrupt | `RepositoryDoesNotVerify` | **204s** |
+| The metrics agent itself stopped | `AlloyNotReporting` | **253s** |
+| A node is isolated from etcd | `PatroniLostDcs` | **260s** |
+
+Each was induced and its alert watched firing, with the other candidate alerts
+required to stay quiet. **Add these to the RTO of any row that does not
+self-repair** — for blocked writes, 130s of detection precedes however long the
+repair takes, and the repair cannot start earlier.
+
+Two faults are deliberately **not** alerted: PostgreSQL killed while Patroni
+lives, and a primary VM lost with two survivors. Both are repaired inside a
+minute, and a threshold short enough to catch them would fire on every routine
+promotion. They remain *reconstructable* from logs, which is the property that
+matters after the fact rather than during.
+
+**Firing is not arriving.** The table above is time-to-firing; between a firing
+rule and a woken human sit a ruler, an alertmanager, a route, a receiver and SMTP.
+Lab 5 broke that path twice while every rule showed green: first a ruler with no
+alertmanager at all, then an alertmanager that delivered exactly one notification
+per restart and dropped every later one. Both looked identical on a dashboard.
+Delivery is therefore asserted separately — the `AlloyNotReporting` mail is read
+out of a real mailbox, and it arrives within the sampling interval of the rule
+firing, so the figures above stand as delivered latencies rather than merely
+evaluated ones.
+
+These figures are latencies of the alerting pipeline on an idle three-node lab.
+They are not a promise about a pager, a rota, or a human being awake.
+
 ## Per failure mode
 
 RTO is time until a client can commit again, not until the cluster is fully

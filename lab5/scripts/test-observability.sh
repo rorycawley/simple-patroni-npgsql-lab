@@ -294,8 +294,13 @@ echo "=== AC-5: the pipeline is monitored, and alerts ARRIVE ==="
 # Firing and arriving are different claims. Between a firing rule and a woken
 # human sit a ruler, an alertmanager, a route, a receiver and SMTP -- and this
 # lab found all of them broken while the rules showed green: Mimir's `all` target
-# excludes the alertmanager, so the ruler logged "Error sending alert" every
-# minute to an endpoint that 404'd, and nothing else reported it.
+# excluded the alertmanager, so the ruler logged "Error sending alert" every
+# minute to an endpoint that 404'd, and nothing else reported it. Its replacement,
+# Mimir's built-in alertmanager, then delivered exactly ONE notification per
+# restart and failed every later one with "invalid service state: Terminated"
+# while /services still reported it Running. Both failures looked identical from
+# the dashboard: every rule green, every rule firing, nobody woken. Alerting now
+# runs on a standalone Alertmanager with a mounted config file.
 MAILPIT="http://$GW:${LAB5_MAILPIT_PORT:-8025}"
 curl -sf --max-time 8 "$MAILPIT/api/v1/messages?limit=1" >/dev/null 2>&1 \
   && pass "the mailbox is reachable, so 'no mail arrived' can be told from 'nothing was listening'" \
@@ -317,21 +322,37 @@ delivered=""
 ac5_start=$SECONDS
 for _ in $(seq 1 50); do
   sleep 12
-  n="$(curl -s --max-time 8 "$MAILPIT/api/v1/messages?limit=5" 2>/dev/null | jq -r '.messages_count // 0')"
-  (( ${n%%.*} > 0 )) && { delivered=yes; break; }
+  # WHICH alert arrived, not whether ANY mail did. This check used to accept the
+  # first message in the box and then inspect it -- and it passed on a stale
+  # synthetic alert left behind by an earlier probe, reporting delivery of
+  # something that had nothing to do with the agent that was stopped. A delivery
+  # test that any mail satisfies is not a delivery test.
+  #
+  # Requiring this specific alert also proves the pipeline delivers MORE THAN
+  # ONCE: stopping Alloy trips PatroniLostDcs first, so by the time the
+  # AlloyNotReporting mail lands, a separate notification has already been sent.
+  # That matters because the previous alertmanager delivered exactly one
+  # notification after a restart and silently dropped every one after it.
+  for id in $(curl -s --max-time 8 "$MAILPIT/api/v1/messages?limit=25" 2>/dev/null \
+                | jq -r '.messages[]?.ID'); do
+    if curl -s --max-time 8 "$MAILPIT/api/v1/message/$id" 2>/dev/null \
+         | grep -q "AlloyNotReporting"; then
+      delivered="$id"; break
+    fi
+  done
+  [[ -n "$delivered" ]] && break
 done
 ac5_latency=$((SECONDS - ac5_start))
 on "$victim" sudo systemctl start alloy >/dev/null 2>&1
 
 if [[ -n "$delivered" ]]; then
-  pass "stopping Alloy on ${victim#$VM_PREFIX} produced an alert that ARRIVED in the mailbox, ${ac5_latency}s after the agent stopped"
+  pass "stopping Alloy on ${victim#$VM_PREFIX} produced an AlloyNotReporting mail that ARRIVED, ${ac5_latency}s after the agent stopped, and it was not the first mail of the run"
 else
   fail "Alloy was stopped and no alert was delivered; the pipeline fires into a void"
 fi
 
 if [[ -n "$delivered" ]]; then
-  mid="$(curl -s --max-time 10 "$MAILPIT/api/v1/messages?limit=1" 2>/dev/null | jq -r '.messages[0].ID')"
-  body="$(curl -s --max-time 10 "$MAILPIT/api/v1/message/$mid" 2>/dev/null)"
+  body="$(curl -s --max-time 10 "$MAILPIT/api/v1/message/$delivered" 2>/dev/null)"
   subj="$(jq -r '.Subject // ""' <<< "$body" 2>/dev/null)"
   grep -qiE "FIRING" <<< "$subj" \
     && pass "and it is legible: subject '$subj'" \

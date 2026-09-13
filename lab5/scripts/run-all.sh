@@ -148,6 +148,11 @@ main() {
   # induces a failover and restarts the whole monitoring stack -- early in the
   # suite that disturbed every phase after it, which assume a settled cluster.
   run_phase "Monitoring: every node ships, telemetry lands in MinIO, the cluster does not depend on it" test_observability optional
+  # Runs here, after the monitoring phase and among the fault injections, because
+  # it induces five faults of its own and waits for every rule to go quiet between
+  # them. A phase that is never invoked is a phase that rots: it passes once and
+  # then quietly stops matching the system it claims to check.
+  run_phase "Alerting: every fault raises its own alert and no other" test_alert_coverage optional
   run_phase "Criterion 2: failover after the primary VM is lost" test_failover_vm optional
   run_phase "Criterion 2: failover after PostgreSQL is killed" test_failover_postgres optional
   run_phase "Split brain: softdog fences a frozen Patroni" test_fencing_patroni optional

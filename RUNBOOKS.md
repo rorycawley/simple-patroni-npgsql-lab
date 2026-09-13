@@ -160,6 +160,8 @@ them because they are the procedures you happen to know.
 **Status: VERIFIED** — `make test_runbook` reproduces exactly this state and
 recovers from it, in both labs.
 
+> **What tells you:** `WritesBlockedOnSyncReplication`, in about 130s. It fires when `synchronous_standby_names` is Patroni's unsatisfiable placeholder `ANY 1 (*)`, which cannot occur on a healthy cluster. [Lab 5](lab5/README.md) induced this fault and watched that alert fire, with the other candidates required to stay quiet.
+
 ## Symptom
 
 Commits hang. They do not fail — clients with a command timeout report a
@@ -242,6 +244,8 @@ tests cannot cover: they run on nodes whose watchdog works. Measured — **no
 leader for 90 seconds**, with etcd healthy and the cluster unpaused, and
 promotion happening by itself the moment the module came back.
 
+> **What tells you:** `NoLeaderAnywhere`, in about 190s. It fires when no node has reported itself primary for 90s. If `ClusterPaused` and `EtcdQuorumLost` are NOT also firing, this is the watchdog cause. [Lab 5](lab5/README.md) induced this fault and watched that alert fire, with the other candidates required to stay quiet.
+
 ## Symptom
 
 The primary is gone and nothing was promoted. Clients cannot write, and
@@ -298,6 +302,8 @@ Two things the drill confirmed, both of which save time here:
 
 **Status: VERIFIED** — `make test_runbook` pauses the cluster, runs the check
 below, applies the fix, and asserts automatic failover is live again.
+
+> **What tells you:** `ClusterPaused`, in about 190s. It fires when `patroni_is_paused` is 1 somewhere. [Lab 5](lab5/README.md) induced this fault and watched that alert fire, with the other candidates required to stay quiet.
 
 ## Why this matters more than it looks
 
@@ -367,6 +373,8 @@ and refused writes with `cannot execute INSERT in a read-only transaction`, and
 Patroni re-acquired the leader key **by itself** once the members were restarted
 — no `--force-new-cluster`, exactly as the "Do not" below requires.
 
+> **What tells you:** `EtcdQuorumLost` (140s) and `PatroniLostDcs`, in about 260s. It fires when fewer than two etcd members are reachable, or one node has not reached the DCS for over a minute. [Lab 5](lab5/README.md) induced this fault and watched that alert fire, with the other candidates required to stay quiet.
+
 ## Symptom
 
 Patroni cannot write to the DCS. The leader demotes itself and the cluster is
@@ -409,6 +417,8 @@ within `ttl`.
 runs the diagnosis below, and applies the fix. Drilling it corrected the page:
 `reinit` alone was listed as the remedy, and for this whole class of fault it
 cannot work, because Patroni is not running to receive it.
+
+> **What tells you:** `PatroniNotScrapable`, in about 150s. It fires when Patroni itself has stopped answering. The agent on that node keeps running, so the node looks alive. [Lab 5](lab5/README.md) induced this fault and watched that alert fire, with the other candidates required to stay quiet.
 
 ```sh
 sudo -u postgres patronictl -c /etc/patroni/patroni.yml list
@@ -483,6 +493,8 @@ on the leader — `failed_count` rose, `last_failed_wal` named the stuck segment
 backlog **drained to zero with no further intervention**. Both traps below were
 confirmed in the same run: the standby reported `failed_count=0` throughout, and
 `pgbackrest check` on that standby failed `[027]`.
+
+> **What tells you:** `ArchivingFailing` (192s) and `RepositoryDoesNotVerify`, in about 204s. It fires when archive failures are increasing, or the repository no longer verifies. [Lab 5](lab5/README.md) induced this fault and watched that alert fire, with the other candidates required to stay quiet.
 
 > Watch the **archive backlog**, not the file count in `pg_wal`. PostgreSQL
 > preallocates and recycles a pool of segments sized by `min_wal_size`, so that
