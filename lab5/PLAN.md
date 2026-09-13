@@ -52,7 +52,7 @@ None of them are assumptions.
 | --- | --- | --- |
 | **The stack runs on the control machine**, like MinIO | Monitoring that dies with the cluster it watches is not monitoring. The failure this lab exists for is a cluster that has stopped doing something, and something outside it has to notice | The stack is not itself highly available; that gap is stated rather than solved |
 | **Alloy on every node**, shipping metrics and logs | One agent, two signals, and it is what the design already names | Another service per node to install and keep running |
-| **A local webhook receiver as the alert destination** | Proving an alert *fires* is easy; proving it *arrives* is the part that is usually skipped, and AC-5 asks for it. A receiver in the lab makes arrival assertable without email or a pager vendor | It proves delivery to a local endpoint, not to a phone at 03:00. Stated as a gap |
+| **Mailpit as the alert destination**, not a webhook sink | Proving an alert *fires* is easy; proving it *arrives* is the part usually skipped. Email is the channel these alerts would really use, and it exercises what a webhook cannot: Alertmanager's `email_configs`, and the TEMPLATING inside every annotation. A JSON dump would accept `<no value>` as a subject line without comment | It proves delivery to a local mailbox, not to a phone at 03:00. Stated as a gap rather than closed |
 | **A custom pgBackRest exporter**, not a shell wrapper around `verify` | Forced by the findings above: the exit codes are useless, so the exporter must parse output and expose `repo_verify_ok`, `last_backup_age_seconds`, and `archive_backlog_segments` | Custom code to maintain, and it must itself be tested against a *corrupted* repository |
 | **Telemetry is stored in MinIO**, one bucket per store: `lab5-loki` and `lab5-mimir` | Decided by the owner. It is how these components are run in production — none of them keep data on local disk at scale — and the lab already has the hard parts: TLS, a private CA the guests trust, and a scoped-credential pattern | **Coupling, accepted knowingly.** The backups and the telemetry now share one object store, so a MinIO outage stops backups *and* blinds the monitoring meant to notice, with the alert unable to be written. Separate buckets and credentials limit blast radius but do not remove it. The production form is a separate instance |
 | **Mimir, not Prometheus** | Forced by the decision above: Prometheus writes a local TSDB and has no S3 backend, so S3-backed metrics means Mimir | More configuration than the bundled demo image provides, so the components are run explicitly rather than as one prepackaged container |
@@ -284,14 +284,41 @@ test that induced it.
 > first, and a failover that does not happen fails the check instead of being
 > papered over with an old one.
 
-### P5 — Monitoring the monitoring
+### P5 — Monitoring the monitoring — **done**
 
 **What.** A stopped Alloy must be **detected**, not read as silence. A silent
 alertmanager must be detected. And a fired alert must be shown to have arrived.
 **Serves.** AC-5.
 **Done when.** Stopping Alloy on one node raises an alert within a stated window,
-and the webhook receiver holds the payload of an alert the run deliberately
-triggered.
+and the mailbox holds the alert the run deliberately triggered.
+
+> **Done, and the window is stated: 253s** from the agent stopping to the alert
+> landing in the mailbox.
+>
+>     subject: [FIRING:1]  (AlloyNotReporting lab5-pg3 0 critical)
+>     every annotation template rendered; no '<no value>' anywhere
+>     and it carries the runbook reference
+>
+> **The pipeline was broken the whole time P2 and P3 were "passing".** Mimir's
+> `all` target deliberately excludes the alertmanager, so the ruler evaluated
+> rules, marked them firing, tried to deliver them, and logged `Error sending
+> alert` to an endpoint that 404'd -- once a minute, for an hour, while every rule
+> showed green. Three alerts had been *watched firing* and not one of them was
+> delivered anywhere. Found by reading Mimir's own log, because nothing else
+> reported it, which is the argument for this phase in one sentence.
+>
+> **An agent cannot report its own death.** The first rule used
+> `up{job="integrations/self"} == 0`, and Alloy scrapes ITSELF: a stopped agent
+> does not report a failed scrape, it stops reporting, and the last value it sent
+> persists through the lookback. Measured -- with Alloy stopped, that metric still
+> read 1 for the dead node. The absence has to be noticed by the STORE, so the
+> rule asks how long ago the node last said anything.
+>
+> That fast rule has a narrower flaw worth keeping in mind: once a node's series
+> ages out of the lookback completely it vanishes from the expression, and the
+> alert RESOLVES while the node is still dead. So the durable detector counts
+> reporting nodes against a fixed expected number -- the only way to notice
+> something that contributes nothing to any expression about itself.
 
 > The failure mode here is the one every monitoring system has: it goes quiet,
 > and quiet looks exactly like healthy. The same shape as a check that passes on

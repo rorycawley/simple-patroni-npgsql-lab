@@ -38,6 +38,7 @@ readonly TELEMETRY_POLICY=lab5-telemetry-rw
 readonly GRAFANA_PORT="${LAB5_GRAFANA_PORT:-3000}"
 readonly MIMIR_PORT="${LAB5_MIMIR_PORT:-9009}"
 readonly LOKI_PORT="${LAB5_LOKI_PORT:-3100}"
+readonly MAILPIT_HTTP_PORT="${LAB5_MAILPIT_PORT:-8025}"
 
 readonly MIMIR_IMAGE="grafana/mimir:2.14.2"
 readonly LOKI_IMAGE="grafana/loki:3.3.2"
@@ -70,7 +71,7 @@ gateway_ip() {
 }
 
 docker_() { docker "$@"; }
-running() { [[ -n "$(docker_ ps -q -f "name=^lab5-(grafana|mimir|loki)$" 2>/dev/null)" ]]; }
+running() { [[ -n "$(docker_ ps -q -f "name=^lab5-(grafana|mimir|loki|mailpit)$" 2>/dev/null)" ]]; }
 
 # `host.lima.internal`, NOT `host.docker.internal`. Measured from a container on
 # this machine:
@@ -136,7 +137,13 @@ write_configs() {
   # Mimir, monolithic. One bucket with prefixes rather than three buckets: the
   # stores are logically separate and operationally one thing to lose.
   cat > "$CONF_DIR/mimir.yaml" <<MIMIR
-target: all
+# `all,alertmanager` -- NOT just `all`. Mimir's `all` target deliberately excludes
+# the alertmanager, so with `all` the ruler evaluates rules, marks them firing,
+# tries to deliver them, and logs `Error sending alert` every minute to an
+# endpoint that 404s. Rules looked healthy and nothing was ever delivered, which
+# is precisely the failure AC-5 exists to catch -- found here by reading Mimir's
+# own log, because nothing else reported it.
+target: all,alertmanager
 multitenancy_enabled: false
 server:
   http_listen_port: ${MIMIR_PORT}
@@ -167,10 +174,21 @@ blocks_storage:
     retention_period: 6h
   bucket_store:
     sync_dir: /data/tsdb-sync
+ruler:
+  # Without this the ruler evaluates rules, marks them firing, and sends them
+  # NOWHERE. Measured before P5: three alerts had been watched firing and none of
+  # them were delivered anywhere, which is a rule that works and monitoring that
+  # does not.
+  alertmanager_url: http://127.0.0.1:${MIMIR_PORT}/alertmanager
 ruler_storage:
   s3:
     bucket_name: ${MIMIR_BUCKET}
   storage_prefix: ruler
+alertmanager:
+  data_dir: /data/alertmanager
+  external_url: http://127.0.0.1:${MIMIR_PORT}/alertmanager
+  sharding_ring:
+    replication_factor: 1
 alertmanager_storage:
   s3:
     bucket_name: ${MIMIR_BUCKET}
@@ -261,6 +279,15 @@ do_start() {
     -v "$CONF_DIR/ca.crt:/etc/loki/ca.crt:ro" \
     "$LOKI_IMAGE" -config.file=/etc/loki/loki.yaml >>"$LOG_FILE" 2>&1
 
+  # Mailpit, not a hand-rolled webhook sink. Email is the channel these alerts
+  # would actually use, and it exercises the part a webhook cannot: Alertmanager's
+  # email_configs, and the TEMPLATING inside every annotation. A JSON dump would
+  # accept `<no value>` as a subject line without comment; a rendered mail does
+  # not. SMTP on 1025, HTTP API on 8025 for the checks to read.
+  docker_ run -d --name lab5-mailpit --network "$NET" \
+    -p "${MAILPIT_HTTP_PORT}:8025" \
+    axllent/mailpit:v1.21 >>"$LOG_FILE" 2>&1
+
   docker_ run -d --name lab5-grafana --network "$NET" \
     -p "${GRAFANA_PORT}:3000" \
     -e GF_AUTH_ANONYMOUS_ENABLED=true \
@@ -280,6 +307,28 @@ do_start() {
     sleep 2
   done
   if [[ -n "$ready" ]]; then
+    # The alertmanager config is per-tenant and must be uploaded; without it a
+    # firing alert reaches an alertmanager with no route and stops there.
+    cat > "$CONF_DIR/alertmanager.yaml" <<'AMCFG'
+alertmanager_config: |
+  route:
+    receiver: lab5-oncall
+    group_wait: 5s
+    group_interval: 10s
+    repeat_interval: 1h
+  receivers:
+    - name: lab5-oncall
+      email_configs:
+        - to: oncall@lab5.example
+          from: alertmanager@lab5.example
+          smarthost: lab5-mailpit:1025
+          require_tls: false
+          send_resolved: true
+AMCFG
+    curl -s --max-time 20 -X POST --data-binary @"$CONF_DIR/alertmanager.yaml" \
+      "http://127.0.0.1:${MIMIR_PORT}/api/v1/alerts" >/dev/null 2>&1 \
+      && echo "Alertmanager route loaded"
+
     if [[ -f "$LAB_DIR/observability/rules/lab5.yaml" ]]; then
       curl -s --max-time 20 -X POST -H "Content-Type: application/yaml" \
         --data-binary @"$LAB_DIR/observability/rules/lab5.yaml" \
@@ -295,7 +344,7 @@ do_start() {
 }
 
 do_stop() {
-  docker_ rm -f lab5-grafana lab5-loki lab5-mimir >/dev/null 2>&1
+  docker_ rm -f lab5-grafana lab5-loki lab5-mimir lab5-mailpit >/dev/null 2>&1
   echo "Monitoring stack stopped (telemetry kept in MinIO)"
 }
 

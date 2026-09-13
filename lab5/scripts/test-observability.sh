@@ -290,6 +290,63 @@ if [[ -n "$new_leader" && -n "$actual" ]]; then
 fi
 
 echo
+echo "=== AC-5: the pipeline is monitored, and alerts ARRIVE ==="
+# Firing and arriving are different claims. Between a firing rule and a woken
+# human sit a ruler, an alertmanager, a route, a receiver and SMTP -- and this
+# lab found all of them broken while the rules showed green: Mimir's `all` target
+# excludes the alertmanager, so the ruler logged "Error sending alert" every
+# minute to an endpoint that 404'd, and nothing else reported it.
+MAILPIT="http://$GW:${LAB5_MAILPIT_PORT:-8025}"
+curl -sf --max-time 8 "$MAILPIT/api/v1/messages?limit=1" >/dev/null 2>&1 \
+  && pass "the mailbox is reachable, so 'no mail arrived' can be told from 'nothing was listening'" \
+  || fail "the alert destination is not reachable; delivery cannot be asserted"
+
+curl -s --max-time 10 -X DELETE "$MAILPIT/api/v1/messages" >/dev/null 2>&1
+
+# Alloy cannot report its own death: it scrapes ITSELF, so a stopped agent stops
+# sending and the last value it sent persists through the lookback. Measured --
+# with Alloy stopped, up{job="integrations/self"} still read 1 for that node. The
+# rule therefore asks the STORE how long ago the node last said anything.
+victim="${VM_NAMES[2]}"
+on "$victim" sudo systemctl stop alloy >/dev/null 2>&1
+delivered=""
+# Up to 10 minutes, and the latency is REPORTED rather than merely tolerated. A
+# node that stops shipping has to age out of the query lookback before anything
+# can notice it is gone -- that delay is a property of the design, so the run
+# states it instead of hiding it behind a generous timeout.
+ac5_start=$SECONDS
+for _ in $(seq 1 50); do
+  sleep 12
+  n="$(curl -s --max-time 8 "$MAILPIT/api/v1/messages?limit=5" 2>/dev/null | jq -r '.messages_count // 0')"
+  (( ${n%%.*} > 0 )) && { delivered=yes; break; }
+done
+ac5_latency=$((SECONDS - ac5_start))
+on "$victim" sudo systemctl start alloy >/dev/null 2>&1
+
+if [[ -n "$delivered" ]]; then
+  pass "stopping Alloy on ${victim#$VM_PREFIX} produced an alert that ARRIVED in the mailbox, ${ac5_latency}s after the agent stopped"
+else
+  fail "Alloy was stopped and no alert was delivered; the pipeline fires into a void"
+fi
+
+if [[ -n "$delivered" ]]; then
+  mid="$(curl -s --max-time 10 "$MAILPIT/api/v1/messages?limit=1" 2>/dev/null | jq -r '.messages[0].ID')"
+  body="$(curl -s --max-time 10 "$MAILPIT/api/v1/message/$mid" 2>/dev/null)"
+  subj="$(jq -r '.Subject // ""' <<< "$body" 2>/dev/null)"
+  grep -qiE "FIRING" <<< "$subj" \
+    && pass "and it is legible: subject '$subj'" \
+    || fail "the mail arrived with an unusable subject: '$subj'"
+  # The reason this lab uses email rather than a webhook: a JSON dump would
+  # accept an unrendered template without comment.
+  grep -qi "no value" <<< "$body" \
+    && fail "an annotation rendered as '<no value>'; the alert would tell a human nothing" \
+    || pass "every annotation template rendered; no '<no value>' anywhere in the mail"
+  grep -qiE "runbook" <<< "$body" \
+    && pass "and it carries the runbook reference, so the reader knows which procedure to follow" \
+    || fail "the mail names no runbook"
+fi
+
+echo
 echo "=== Telemetry cannot reach the backup repository ==="
 # The coupling accepted in the design is one object store. It is not one
 # identity, and this is the assertion that keeps those separate.
