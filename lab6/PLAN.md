@@ -93,8 +93,12 @@ healthy, and a mixed-version cluster has been shown to replicate.
 
 Each is restored and asserted healthy before the next begins.
 
-**Done when:** both costs are numbers, both signatures match the runbooks that
-document them, and the cluster is healthy again.
+**Done when:** both costs are numbers and the cluster is healthy again. Only the
+first has a runbook signature to match — runbook 1's. The second is measured
+against [`SLA.md`](../SLA.md#per-failure-mode) instead: a switchover moves the
+leader in ~2s, and PostgreSQL dying under Patroni costs ~10–25s, so the number to
+produce is what restarting the primary directly costs against the ~2s it could
+have cost.
 
 ### P3 — The full cycle, invisible to the client
 
