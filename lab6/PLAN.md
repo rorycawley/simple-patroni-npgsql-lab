@@ -51,12 +51,12 @@ The first four decide whether the lab is possible at all.
 | --- | --- | --- |
 | P0 | — | A cluster on 18.4, 18.6 confirmed installable, and the missing alert added |
 | P1 | AC-3, AC-7 | One standby patched through Patroni, cluster undegraded after |
-| P2 | AC-2 | Both wrong moves performed and costed |
+| P2 | AC-2, and AC-8's negative half | Both wrong moves performed, costed, and their alerting recorded |
 | P3 | AC-1 | The full four-step cycle, zero failed transactions |
 | P4 | AC-4 | A kernel update and reboot, unattended, watchdog armed after |
 | P5 | AC-5 | etcd and Patroni upgraded a member at a time, quorum never lost |
 | P6 | AC-6 | Broken binaries, rolled back without rebuilding the node |
-| P7 | AC-8 | What the on-call would actually have received |
+| P7 | AC-8's positive half | A correct cycle, and a mailbox that stays empty |
 
 ### P0 — Fork, pin, and add the missing alert
 
@@ -83,22 +83,32 @@ never moved, then assert AC-7's full end state.
 **Done when:** one standby runs 18.6 while the others run 18.4, the cluster is
 healthy, and a mixed-version cluster has been shown to replicate.
 
-### P2 — The two wrong moves, performed and costed
+### P2 — The two wrong moves: performed, costed, and their alerting recorded
 
-1. **Both standbys at once.** Measure how long writes block, and confirm the
+The mailbox is emptied first, and the expected alerting outcome is written down
+**before** each control runs — otherwise "the right alert fired" is a judgement
+made after seeing the result. Capturing it here, while the fault is already
+induced, is why these controls run once rather than twice.
+
+1. **Both standbys at once.** Measure how long writes block and confirm the
    signature matches [runbook 1](../RUNBOOKS.md#1-writes-are-blocked-on-synchronous-replication)'s:
-   `ANY 1 (*)` with backends in `SyncRep`.
+   `ANY 1 (*)` with backends in `SyncRep`. Held past 130s so the alert has time
+   to fire. *Expected: `WritesBlockedOnSyncReplication`, and no other.*
 2. **`systemctl restart` on the primary.** Measure the election and the
-   client-visible failure.
+   client-visible failure. *Expected: **no alert at all**.* The cluster
+   self-repairs in ~10–25s, under every threshold in the ruleset. If that holds,
+   it is a finding rather than a gap — and it belongs in the maintenance runbook,
+   which cannot promise an operator that monitoring would have caught this.
 
 Each is restored and asserted healthy before the next begins.
 
-**Done when:** both costs are numbers and the cluster is healthy again. Only the
-first has a runbook signature to match — runbook 1's. The second is measured
-against [`SLA.md`](../SLA.md#per-failure-mode) instead: a switchover moves the
-leader in ~2s, and PostgreSQL dying under Patroni costs ~10–25s, so the number to
-produce is what restarting the primary directly costs against the ~2s it could
-have cost.
+**Done when:** both costs are numbers, each control's alerting matches what was
+named in advance, and the cluster is healthy again.
+
+Only the first cost has a runbook signature to match. The second is measured
+against [`SLA.md`](../SLA.md#per-failure-mode): a switchover moves the leader in
+~2s and PostgreSQL dying under Patroni costs ~10–25s, so the number to produce is
+what restarting the primary directly costs against the ~2s it could have cost.
 
 ### P3 — The full cycle, invisible to the client
 
@@ -145,11 +155,15 @@ against Lab 4's measured `reinit` cost to state what the rollback saved.
 **Done when:** a node has been recovered from a failed upgrade without a resync,
 and the saving is a number.
 
-### P7 — What the on-call would actually have received
+### P7 — A correct cycle, and a mailbox that stays empty
 
-Empty the mailbox, run the complete correct cycle, assert it is **still empty**.
-Then run each negative control from P2 and assert the named alert fires and no
-other.
+Empty the mailbox, run the complete correct cycle, and assert it is **still
+empty** at the end. AC-8's other half — what each wrong move raises — was
+recorded in P2, while those faults were already induced.
+
+The cycle is the one P3 performs, run again rather than reused: P3's runs
+alongside live backup timers and its own measurements, and a silence assertion
+has to be made about a clean run or it proves nothing about maintenance.
 
 If a correct cycle cannot be made silent, the output is the list of alerts it
 raised and a recommendation on thresholds. That is a finding about the alerting,

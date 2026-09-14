@@ -105,7 +105,7 @@ It forks [Lab 5](../lab5/README.md), for two things it needs:
 | AC-5 | etcd is upgraded without losing quorum | One member at a time; `etcdctl endpoint health` shows the cluster healthy throughout, and Patroni never loses the DCS |
 | AC-6 | A failed upgrade is recoverable | With a deliberately broken package, the node's new binaries fail to start; the documented rollback returns it to service **without** rebuilding it from the primary |
 | AC-7 | The cluster is not left degraded | Afterwards: one leader, two `streaming` standbys, quorum commit active, watchdog armed, **and not paused** — the state [runbook 3](../RUNBOOKS.md#3-patroni-is-paused-and-nobody-remembers) exists to catch |
-| AC-8 | Correct maintenance does not page the on-call | Through a complete, correctly ordered patch cycle: **no alert fires**. Through each negative control in AC-2: the alert named in advance fires, **and no other** |
+| AC-8 | Correct maintenance does not page the on-call | Through a complete, correctly ordered patch cycle: **no alert fires**. Through each negative control in AC-2: the alerting outcome **named in advance** is what happens — for blocked writes, `WritesBlockedOnSyncReplication` and no other; for an unnecessary election, **nothing**, because it self-repairs faster than every threshold in the ruleset |
 
 ### Four of these can surprise us; four are postconditions
 
@@ -138,6 +138,14 @@ reading at exactly the wrong moment. Lab 5's alerts fire between 130s and 260s
 and several patch steps take longer than that, so silence is not automatic: it
 has to be designed for and verified. If a correct cycle cannot be made quiet,
 that is a finding about the thresholds, and better learned here than at 03:00.
+
+Its second half is the more uncomfortable one. An unnecessary election resolves
+in ~10–25s, under every threshold in the ruleset, so **no alert will fire for
+it** — the wrong move is real, client-visible, and invisible to monitoring.
+Naming that outcome in advance rather than discovering it is the point: the
+maintenance runbook cannot tell an operator "you would have been alerted", and
+has to say plainly that this one is caught by following the order, not by being
+watched.
 
 ## What this contributes back
 
