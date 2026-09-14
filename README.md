@@ -296,10 +296,10 @@ One subject per file, with no file repeating another.
 | [`SLA.md`](SLA.md) | RPO, RTO and availability per failure mode, and where those numbers come from |
 | [`SERVICE-ACCOUNTS.md`](SERVICE-ACCOUNTS.md) | Every identity and secret the cluster needs, what each may do, and which lab introduces it |
 | [`WHY_PGBACKREST_AND_PGDUMP.md`](WHY_PGBACKREST_AND_PGDUMP.md) | The two backup tools in full: when to use each, when not to, and what to take before a manual change |
-| [`lab1/README.md`](lab1/README.md), [`lab2/README.md`](lab2/README.md) | That lab alone — its scope, its acceptance criteria, how each is proven, and how to run it |
-| [`lab3`](lab3/README.md) … [`lab8/README.md`](lab8/README.md) | The design and acceptance criteria for each unbuilt stage |
-| [`lab1/ansible/README.md`](lab1/ansible/README.md), [`lab2/ansible/README.md`](lab2/ansible/README.md), [`lab3/ansible/README.md`](lab3/ansible/README.md) | How that lab's automation installs and configures the nodes, and the network policy it applies |
-| [`lab2/PLAN.md`](lab2/PLAN.md), [`lab3/PLAN.md`](lab3/PLAN.md), [`lab4/PLAN.md`](lab4/PLAN.md) | How that lab is built rather than what it must prove: the phases, their order, the risks worth watching, and what carries into the next lab |
+| [`lab1`](lab1/README.md) … [`lab5/README.md`](lab5/README.md) | That lab alone — its scope, its acceptance criteria, how each is proven, and how to run it. These five are built, and each criterion above is answered by a command in that lab |
+| [`lab6`](lab6/README.md) … [`lab8/README.md`](lab8/README.md) | The design and acceptance criteria for each stage not yet built. **They claim no results** |
+| [`lab1/ansible/README.md`](lab1/ansible/README.md) … [`lab5/ansible/README.md`](lab5/ansible/README.md) | How that lab's automation installs and configures the nodes, and the network policy it applies |
+| [`lab2/PLAN.md`](lab2/PLAN.md) … [`lab5/PLAN.md`](lab5/PLAN.md) | How that lab is built rather than what it must prove: the phases, their order, the risks worth watching, and what carries into the next lab |
 
 There is one intentional exception: the two `ansible/README.md` files overlap
 heavily. Lab 2 is a standalone copy of Lab 1, and pointing one at the other would
