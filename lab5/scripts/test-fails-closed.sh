@@ -5,7 +5,7 @@ set -uo pipefail
 #
 # Every other check in this lab asks whether recovery works. This one asks what
 # happens when it cannot, which is the more dangerous question. R1, the defining
-# risk of Lab 5, is a restore that produces a cluster which starts, accepts
+# risk of Lab 4, is a restore that produces a cluster which starts, accepts
 # connections and looks entirely healthy while holding the wrong data. Nobody
 # reads the logs of a recovery that appeared to succeed.
 #

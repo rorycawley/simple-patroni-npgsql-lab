@@ -15,7 +15,7 @@ set -uo pipefail
 #   LSN             equally precise and read-only, so it can be captured without
 #                   writing to the primary.
 #   timestamp       what you actually have in a real incident, and the weakest:
-#                   measured in Lab 5's planning, a target truncated to the
+#                   measured in Lab 4's planning, a target truncated to the
 #                   second excluded rows committed within that same second.
 #
 # This check places all three at one moment and proves the repository can see

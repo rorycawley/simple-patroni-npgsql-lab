@@ -10,7 +10,7 @@ set -uo pipefail
 # checked the pgBackRest objects and stopped would leave the dumps sitting in
 # plaintext beside them and still pass, having tested the easier half of the data.
 #
-# Reloading into a scratch database is not a restore rehearsal -- that is Lab 5.
+# Reloading into a scratch database is not a restore rehearsal -- that is Lab 4.
 # It is the cheapest available proof that the dump can still be PARSED, which is
 # the property `pgbackrest verify` cannot give: verifying checksums confirms the
 # bytes are intact and says nothing about whether PostgreSQL can read them.

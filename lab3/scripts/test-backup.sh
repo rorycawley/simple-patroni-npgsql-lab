@@ -8,7 +8,9 @@ set -uo pipefail
 # against a repository containing none, which is exactly the state Labs 1 and 2
 # are in. So this asserts the ARTEFACT.
 #
-# It also never trusts an exit status. Measured while planning this lab:
+# It also never trusts an exit status. Measured while planning Lab 3 (named
+# explicitly: a comment that says "this lab" silently becomes false when the
+# lab is forked, which is how several of these drifted):
 # `pgbackrest info` printed "status: error (other)" with a CryptoError against a
 # repository it could not decrypt, and still exited 0. Everything here is read
 # out of parsed JSON.

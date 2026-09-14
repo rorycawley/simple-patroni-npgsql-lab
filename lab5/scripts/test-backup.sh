@@ -3,12 +3,14 @@ set -uo pipefail
 
 # AC-1: a backup history exists, and only the leader creates it.
 #
-# This is the criterion Lab 5 exists for. `pgbackrest check` passing is not
+# This is the criterion Lab 3 exists for. `pgbackrest check` passing is not
 # evidence that a backup exists -- it validates configuration and passes happily
 # against a repository containing none, which is exactly the state Labs 1 and 2
 # are in. So this asserts the ARTEFACT.
 #
-# It also never trusts an exit status. Measured while planning this lab:
+# It also never trusts an exit status. Measured while planning Lab 3 (named
+# explicitly: a comment that says "this lab" silently becomes false when the
+# lab is forked, which is how several of these drifted):
 # `pgbackrest info` printed "status: error (other)" with a CryptoError against a
 # repository it could not decrypt, and still exited 0. Everything here is read
 # out of parsed JSON.
