@@ -29,8 +29,8 @@ operator would otherwise do:
 | `watchdog: mode: required` | Rebooting without confirming `softdog` came back | A node that cannot arm its watchdog **refuses to be primary at all** — [runbook 2](../RUNBOOKS.md#2-failover-did-not-happen) |
 | etcd and PostgreSQL share a node, not a lifecycle | Patching both in the same window | An unhealthy DCS at the moment Patroni is asked to move a leader |
 
-A single `ansible -a "yum update"` across the inventory violates the first three
-at once. That is the failure this lab exists to characterise.
+A single `ansible -a "yum update"` across the inventory violates all four at
+once. That is the failure this lab exists to characterise.
 
 ## The safe order, which is what is under test
 
@@ -46,7 +46,7 @@ rolling upgrade possible at all.
 4. old primary   now a standby: patch it the same way
 ```
 
-Three rules follow from the constraints above, and each is a step someone skips:
+Four rules follow from the constraints above, and each is a step someone skips:
 
 - **The primary is patched last, and only after a switchover.** A switchover is a
   controlled handover with no `ttl` to wait out, measured at ~2s in
@@ -90,8 +90,9 @@ It forks [Lab 5](../lab5/README.md), for two things it needs:
 - **An encrypted cluster.** Patching means rebooting, and a reboot here has to
   unlock LUKS volumes unattended, land the mounts before PostgreSQL starts, and
   bring `softdog` back. Those are exactly what a kernel update disturbs.
-- **A monitoring stack** already proven to fire on eleven faults and deliver
-  mail a test can read. Without it, AC-8 cannot be asked.
+- **A monitoring stack** with sixteen alert rules, nine of them watched firing
+  with measured latencies, and delivery asserted by reading a real mailbox.
+  Without it, AC-8 cannot be asked.
 
 ## Acceptance criteria
 
@@ -113,8 +114,8 @@ having and unlikely to teach anyone anything. The other four are where the lab
 earns its time:
 
 **AC-2 is what makes the ordering rules load-bearing** rather than superstition.
-Every other criterion can pass on a careful run by a careful operator and prove
-nothing about the *procedure*. It also produces the directly useful output: a
+The four postconditions can all pass on a careful run by a careful operator and
+prove nothing about the *procedure*. It also produces the directly useful output: a
 measured cost for each wrong move, which is what turns "one node at a time" into
 an instruction someone follows at 02:00 rather than an unexplained rule.
 

@@ -41,7 +41,7 @@ The first four decide whether the lab is possible at all.
 | --- | --- | --- |
 | Fork Lab 5 | It is the only base carrying both the encrypted cluster and the monitoring AC-8 needs | A heavier lab, and 16GB holds one at a time, so Lab 5 is destroyed first |
 | Pin to 18.4, patch to 18.6 | One realistic minor hop, the shape of a monthly patch | The build stops tracking latest; the pin needs revisiting when the repo moves |
-| `make check` excludes Lab 5's 25-minute alert-coverage phase | Lab 6's subject is patching. Re-proving eleven inherited alerts every run would push a cycle past 90 minutes | The phase stays available as a target, just not in the default path |
+| `make check` excludes Lab 5's 25-minute alert-coverage phase | Lab 6's subject is patching. Re-proving Lab 5's alerts on every run would push a cycle past 90 minutes | The phase stays available as a target, just not in the default path |
 | Measure every wrong move, never describe it | A cost in seconds is what survives contact with 02:00 | The negative controls are the most destructive tests in the series |
 | Roll back with `dnf downgrade`, not `reinit` | Minor versions do not change the catalogue, so a binary downgrade is safe — the lab proves it rather than asserting it | If a downgrade proves impossible for a package, that is a finding to report, not to engineer around |
 
@@ -163,3 +163,10 @@ characterised.
 | **The negative controls damage the cluster** | Both are documented incidents with VERIFIED runbooks. Each is restored and asserted healthy before the next phase |
 | **Two clusters will not fit in 16GB** | Lab 5 is destroyed before Lab 6 is built; nothing here depends on its data |
 | **A long suite invites concurrent runs**, which mutate one shared cluster and fabricate failures belonging to neither | The suite refuses to start if another run is detected |
+
+## What carries out of this lab
+
+A maintenance runbook, a planned-maintenance figure for `SLA.md`, and the
+`PendingRestart` alert Lab 5 lacks — each described in
+[`README.md`](README.md#what-this-contributes-back), which is where the outputs
+are specified rather than planned.
