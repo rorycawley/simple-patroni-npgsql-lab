@@ -37,7 +37,6 @@ pass() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; failures=$((failures + 1)); }
 on() { local vm="$1"; shift; limactl shell --tty=false "$vm" "$@" 2>/dev/null; }
 mc_() { MC_CONFIG_DIR="$LAB_DIR/.minio/mc" mc --quiet --no-color "$@"; }
-objects() { mc_ ls --recursive "lab5/$1" 2>/dev/null | wc -l | tr -d ' '; }
 
 echo
 echo "=== The stack answers ==="

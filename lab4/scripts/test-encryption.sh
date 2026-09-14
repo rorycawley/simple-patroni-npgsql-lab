@@ -17,10 +17,8 @@ set -uo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly VM_NAMES=(lab4-pg1 lab4-pg2 lab4-pg3)
-readonly VM_PREFIX="lab4-"
 readonly STANZA=lab4
 readonly BIN=/usr/local/lib/lab4
-readonly PATRONI_CONFIG=/etc/patroni/patroni.yml
 readonly RECOVERY_INPUTS="$LAB_DIR/.recovery-inputs/repo.yml"
 readonly PASSFILE=/etc/lab4/dump.pass
 

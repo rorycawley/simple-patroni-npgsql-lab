@@ -14,8 +14,6 @@ set -uo pipefail
 # configured to be remote, everything in it is actually in the bucket, and no
 # node is quietly still writing backups to its own disk.
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly LAB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly VM_NAMES=(lab3-pg1 lab3-pg2 lab3-pg3)
 readonly VM_PREFIX="lab3-"
 readonly STANZA=lab3
