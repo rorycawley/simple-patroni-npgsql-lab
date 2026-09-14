@@ -77,16 +77,22 @@ own lab if it is ever needed.
 
 ## Topology
 
-Four VMs, identical to [Lab 2](../lab2/README.md): three cluster nodes and an
-application host. No new infrastructure — this lab is about a procedure, not a
-component.
+Four VMs: three cluster nodes and an application host. No new infrastructure —
+this lab is about a procedure, not a component.
 
-It forks Lab 2 rather than Lab 1 on purpose. Patching means rebooting, and a
-reboot on the encrypted cluster is strictly more interesting: the LUKS volumes
-must unlock unattended, the mount must land before PostgreSQL starts, and
-`softdog` must come back. Those are exactly the things a kernel update disturbs,
-and Lab 2's AC-4 already proved they survive *one* reboot — this lab does it on
-purpose, repeatedly, as part of a procedure.
+It forks [Lab 5](../lab5/README.md). This file originally said Lab 2, written
+when Lab 2 was the newest encrypted lab; every lab since is a fork of the one
+before it, so Lab 5 already contains everything Lab 2 offered. The reason given
+then still holds and now holds harder: patching means rebooting, and a reboot on
+the encrypted cluster is strictly more interesting — the LUKS volumes must unlock
+unattended, the mount must land before PostgreSQL starts, and `softdog` must come
+back. Those are exactly the things a kernel update disturbs, and Lab 2's AC-4
+proved they survive *one* reboot; this lab does it on purpose, onto a **different
+kernel**, as part of a procedure.
+
+Forking Lab 5 rather than Lab 4 buys one thing that decides AC-8: a monitoring
+stack that is already proven to fire on eleven faults and deliver mail. Without
+it, "does routine maintenance wake anyone" cannot be asked.
 
 ## Acceptance criteria
 
@@ -99,6 +105,22 @@ purpose, repeatedly, as part of a procedure.
 | AC-5 | etcd is upgraded without losing quorum | One member at a time; `etcdctl endpoint health` shows the cluster healthy throughout, and Patroni never loses the DCS |
 | AC-6 | A failed upgrade is recoverable | With a deliberately broken package, the node's new binaries fail to start; the documented rollback returns it to service **without** rebuilding it from the primary |
 | AC-7 | The cluster is not left degraded | Afterwards: one leader, two `streaming` standbys, quorum commit active, watchdog armed, **and not paused** — the state [runbook 3](../RUNBOOKS.md#3-patroni-is-paused-and-nobody-remembers) exists to catch |
+| AC-8 | Correct maintenance does not page the on-call | Through a complete, correctly ordered patch cycle: **no alert fires**. Through each negative control in AC-2: the alert named in advance fires, **and no other** |
+
+> **AC-8 was added before any of this was built**, once [Lab 5](../lab5/README.md)
+> made it measurable — not discovered afterwards and written up as a criterion.
+> The rest are unchanged from before Lab 6 was specified. It is the inverse of
+> Lab 5's AC-2, and reuses that harness.
+
+### AC-8 is the one that decides whether the others get followed
+
+An alerting system that fires through every maintenance window teaches people to
+ignore it, and they stop at exactly the wrong moment — this is how monitoring
+usually fails in practice, quietly and long before the incident it was built for.
+[Lab 5](../lab5/README.md)'s alerts fire between 130s and 260s, and several patch
+steps take longer than that, so silence is not automatic: it has to be designed
+for and then verified. If a correct patch cycle cannot be made quiet, that is a
+finding about the alert thresholds, and better learned here than at 03:00.
 
 ### AC-2 is the one that matters
 
