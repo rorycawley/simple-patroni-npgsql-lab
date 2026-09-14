@@ -116,6 +116,12 @@ main() {
       run_phase "Create the four Lima VMs" create_vms required
       run_phase "Start the backup object store" minio_start required
       run_phase "Install and configure the Patroni cluster" configure_cluster required
+      # `make all` used to stand up the cluster and then run a Monitoring phase
+      # against a stack nothing had started, so a from-scratch run failed on its
+      # own first assertion. Started HERE and not inside test-observability.sh:
+      # a test that starts its own dependency cannot tell "never up" from
+      # "broken". Proven in Lab 6 before being brought back here.
+      run_phase "Start the monitoring stack" observability_start required
       ;;
     check) ;;
     *) usage; exit 2 ;;

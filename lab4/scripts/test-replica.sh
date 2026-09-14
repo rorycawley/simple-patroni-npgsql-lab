@@ -134,6 +134,26 @@ done
   && pass "the rebuild started" \
   || fail "no sign the rebuild ever began; reinit did not take effect"
 
+# FINISHING is detected from the journal for the same reason STARTING is, and
+# the comment above applies just as much here: the member state is stale. Waiting
+# on `streaming` alone recorded a 1s rebuild -- the member was still publishing
+# the state it held BEFORE the reinit took effect -- and the journal was then
+# read before pgBackRest had written a line of its report, so the method
+# assertions below failed against a rebuild that had barely begun. Measured in
+# Lab 6, where the race actually landed; it is latent here, not absent.
+#
+# Patroni announces completion either way, so wait for that, THEN confirm the
+# member agrees. A rebuild that finishes in the journal but never returns to
+# streaming is still a failure, and this order can tell the two apart.
+done_rebuild=""
+for _ in {1..150}; do
+  since_reinit | grep -qiE "replica has been created using (pgbackrest|basebackup)" \
+    && { done_rebuild=yes; break; }
+  sleep 2
+done
+[[ -n "$done_rebuild" ]] \
+  || fail "the rebuild never announced completion in the journal"
+
 rebuilt=""
 for _ in {1..90}; do
   state="$(jq -r --arg m "$member" '.[] | select(.Member == $m) | .State' <<< "$(patroni_json)")"
