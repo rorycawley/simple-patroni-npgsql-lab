@@ -204,6 +204,35 @@ which pgBackRest supports and which
 [the production gap list](../README.md#from-lab-to-production) already carries.
 One repository is a single point of failure for every recovery in this lab.
 
+## Running it
+
+```sh
+make all      # build, start the object store, run every check, report
+make check    # re-run the checks against a cluster that is already up
+make clean    # destroy the VMs and generated files -- but NOT the backups
+```
+
+`make help` lists every target, and is the authority: this file does not repeat
+the list, because a copied list is one that goes stale.
+
+The ladder's top rung is deliberately **not** in `make check`, because it
+destroys the cluster:
+
+```sh
+make test_total_loss_dry   # prove the preconditions, change nothing
+make test_total_loss       # rung 6: destroy all three nodes, rebuild from the repository
+```
+
+Run the dry form first. It asserts the preconditions by *using* them — the
+repository verifies, a full backup exists to replay onto, and the surviving
+credentials actually authenticate — so a failure there costs you nothing, where
+the same failure discovered halfway through a real rebuild costs the cluster.
+
+`make clean` keeps the repository in `.minio/` and the passphrases in
+`.recovery-inputs/` on purpose; that is what rung 6 restores from. Rebuilding
+from scratch afterwards therefore needs `make minio_destroy` first, for the
+stanza reason [Lab 3](../lab3/README.md#running-it) explains.
+
 ## Acceptance criteria
 
 | ID | Property | Pass condition |

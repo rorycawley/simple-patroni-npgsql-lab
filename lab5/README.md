@@ -137,6 +137,32 @@ share one object store. A MinIO outage stops the backups *and* blinds the
 monitoring that should report it. Separate buckets and separate credentials limit
 the blast radius; only a separate instance would remove it.
 
+## Running it
+
+```sh
+make all      # build, start the stack, run every check, report
+make check    # re-run the checks against a cluster that is already up
+make clean    # destroy the VMs and generated files -- but NOT the backups
+```
+
+`make help` lists every target, and is the authority: this file does not repeat
+the list, because a copied list is one that goes stale.
+
+Two are worth knowing before you need them:
+
+- `make test_observability` is the monitoring phase on its own, and
+  `make test_alert_coverage` induces five faults in sequence to prove each raises
+  its own alert **and no other**. The second takes about 25 minutes; it is
+  inducing real faults on a real cluster, one at a time, and waiting for each
+  alert to clear before the next.
+- `make observability_start` / `observability_destroy` control the stack
+  independently of the cluster. It runs on the control machine on purpose —
+  monitoring that dies with the thing it watches is not monitoring — so it
+  survives `make clean` and has to be stopped separately.
+
+**One suite at a time.** These phases induce faults on the shared cluster, so
+two runs at once produce failures that belong to neither.
+
 ## Acceptance criteria
 
 | ID | Property | Pass condition |
