@@ -14,21 +14,23 @@ and in an order that is *proven* safe rather than assumed.
 
 ## Why this is a lab and not a paragraph
 
-Every other lab here injects a fault. This one injects a **routine Tuesday**, and
-that is the point: it is the operation the team will perform most often, and the
-most common cause of self-inflicted outages on an HA cluster.
+Every other lab here injects a fault. This one injects a **routine Tuesday**: the
+operation the team performs most often, and the most common cause of
+self-inflicted outages on an HA cluster.
 
-It is also the operation where this cluster's own guarantees turn into
-constraints. Three of them collide here, and none is obvious from its own lab:
+It is also where this cluster's own guarantees turn into constraints. Each is
+correct, each was proven in an earlier lab, and each forbids something an
+operator would otherwise do:
 
-| Guarantee | What it forbids during patching |
-| --- | --- |
-| `synchronous_node_count: 1` with strict mode | Taking **both** standbys out at once. The second one stops writes — [runbook 1](../RUNBOOKS.md#1-writes-are-blocked-on-synchronous-replication), reached by patching in parallel |
-| `primary_start_timeout: 0` | Restarting PostgreSQL behind Patroni's back. Patroni sees a crash and hands the leader key away immediately, turning a 2-second restart into an election |
-| `watchdog: mode: required` | Rebooting without checking `softdog` is loaded again. A node that cannot arm its watchdog **refuses to be primary at all** — [runbook 2](../RUNBOOKS.md#2-failover-did-not-happen) |
+| Guarantee | What it forbids | If ignored |
+| --- | --- | --- |
+| `synchronous_node_count: 1`, strict mode | Taking **both** standbys out at once | The second one blocks writes — [runbook 1](../RUNBOOKS.md#1-writes-are-blocked-on-synchronous-replication) |
+| `primary_start_timeout: 0` | Restarting PostgreSQL behind Patroni's back | Patroni reads a crash and hands the leader key away: a 2-second restart becomes an election |
+| `watchdog: mode: required` | Rebooting without confirming `softdog` came back | A node that cannot arm its watchdog **refuses to be primary at all** — [runbook 2](../RUNBOOKS.md#2-failover-did-not-happen) |
+| etcd and PostgreSQL share a node, not a lifecycle | Patching both in the same window | An unhealthy DCS at the moment Patroni is asked to move a leader |
 
-A single `ansible -a "yum update"` across the inventory violates all three at
-once. That is the failure this lab exists to characterise.
+A single `ansible -a "yum update"` across the inventory violates the first three
+at once. That is the failure this lab exists to characterise.
 
 ## The safe order, which is what is under test
 
@@ -44,20 +46,23 @@ rolling upgrade possible at all.
 4. old primary   now a standby: patch it the same way
 ```
 
-Two things about that sequence are worth stating, because both are where it goes
-wrong:
+Three rules follow from the constraints above, and each is a step someone skips:
 
-**The primary is patched last, and only after a switchover.** Rebooting or
-restarting the primary directly costs an election — `ttl` (30s) if the node dies
-outright, and client-visible failure either way. A switchover is a controlled
-handover with no `ttl` to wait out, measured at ~2s in
-[`SLA.md`](../SLA.md#per-failure-mode).
-
-**Restarts go through Patroni, not around it.** `patronictl restart` tells
-Patroni what is about to happen; `systemctl restart postgresql-18` does not, and
-with `primary_start_timeout: 0` the difference is an unnecessary failover. This
-is the single most common mistake made by an operator who knows PostgreSQL but
-not Patroni.
+- **The primary is patched last, and only after a switchover.** A switchover is a
+  controlled handover with no `ttl` to wait out, measured at ~2s in
+  [`SLA.md`](../SLA.md#per-failure-mode). Restarting the primary directly costs an
+  election instead.
+- **Restarts go through Patroni, not around it.** `patronictl restart` tells
+  Patroni what is about to happen; `systemctl restart` does not. This is the
+  single most common mistake made by an operator who knows PostgreSQL but not
+  Patroni.
+- **Step 3 needs a healthy cluster.** A switchover requires one leader and two
+  `streaming` standbys, so a run that has left a standby down must not proceed to
+  it.
+- **`pending_restart` is checked before and after.** Patroni exposes
+  `patroni_pending_restart`, and a configuration change awaiting a restart can sit
+  unapplied indefinitely. No alert watches it today; Lab 6 adds one, since this is
+  the operation that clears it.
 
 ## Scope
 
@@ -68,7 +73,7 @@ not Patroni.
 | OS and kernel patching, including the reboot | Unattended or automated patching policy |
 | A client committing throughout, measuring what it saw | Patching the application tier |
 | Rollback when new binaries will not start | Rebuilding a node from backup — that is [Lab 4](../lab4/README.md) |
-| The order above, **and** demonstrating the cost of getting it wrong | Zero-restart patching; a minor upgrade requires a restart by definition |
+| The order above, **and** the measured cost of getting it wrong | Zero-restart patching; a minor upgrade requires a restart by definition |
 
 Major upgrades are excluded deliberately rather than forgotten. They cannot be
 rolling on a physical-replication cluster: the standbys cannot replicate across a
@@ -80,19 +85,13 @@ own lab if it is ever needed.
 Four VMs: three cluster nodes and an application host. No new infrastructure —
 this lab is about a procedure, not a component.
 
-It forks [Lab 5](../lab5/README.md). This file originally said Lab 2, written
-when Lab 2 was the newest encrypted lab; every lab since is a fork of the one
-before it, so Lab 5 already contains everything Lab 2 offered. The reason given
-then still holds and now holds harder: patching means rebooting, and a reboot on
-the encrypted cluster is strictly more interesting — the LUKS volumes must unlock
-unattended, the mount must land before PostgreSQL starts, and `softdog` must come
-back. Those are exactly the things a kernel update disturbs, and Lab 2's AC-4
-proved they survive *one* reboot; this lab does it on purpose, onto a **different
-kernel**, as part of a procedure.
+It forks [Lab 5](../lab5/README.md), for two things it needs:
 
-Forking Lab 5 rather than Lab 4 buys one thing that decides AC-8: a monitoring
-stack that is already proven to fire on eleven faults and deliver mail. Without
-it, "does routine maintenance wake anyone" cannot be asked.
+- **An encrypted cluster.** Patching means rebooting, and a reboot here has to
+  unlock LUKS volumes unattended, land the mounts before PostgreSQL starts, and
+  bring `softdog` back. Those are exactly what a kernel update disturbs.
+- **A monitoring stack** already proven to fire on eleven faults and deliver
+  mail a test can read. Without it, AC-8 cannot be asked.
 
 ## Acceptance criteria
 
@@ -107,80 +106,48 @@ it, "does routine maintenance wake anyone" cannot be asked.
 | AC-7 | The cluster is not left degraded | Afterwards: one leader, two `streaming` standbys, quorum commit active, watchdog armed, **and not paused** — the state [runbook 3](../RUNBOOKS.md#3-patroni-is-paused-and-nobody-remembers) exists to catch |
 | AC-8 | Correct maintenance does not page the on-call | Through a complete, correctly ordered patch cycle: **no alert fires**. Through each negative control in AC-2: the alert named in advance fires, **and no other** |
 
-> **AC-8 was added before any of this was built**, once [Lab 5](../lab5/README.md)
-> made it measurable — not discovered afterwards and written up as a criterion.
-> The rest are unchanged from before Lab 6 was specified. It is the inverse of
-> Lab 5's AC-2, and reuses that harness.
+### Four of these can surprise us; four are postconditions
 
-### AC-8 is the one that decides whether the others get followed
+AC-1, AC-3, AC-5 and AC-7 assert that a correct procedure works. They are worth
+having and unlikely to teach anyone anything. The other four are where the lab
+earns its time:
 
-An alerting system that fires through every maintenance window teaches people to
-ignore it, and they stop at exactly the wrong moment — this is how monitoring
-usually fails in practice, quietly and long before the incident it was built for.
-[Lab 5](../lab5/README.md)'s alerts fire between 130s and 260s, and several patch
-steps take longer than that, so silence is not automatic: it has to be designed
-for and then verified. If a correct patch cycle cannot be made quiet, that is a
-finding about the alert thresholds, and better learned here than at 03:00.
-
-### AC-2 is the one that matters
-
+**AC-2 is what makes the ordering rules load-bearing** rather than superstition.
 Every other criterion can pass on a careful run by a careful operator and prove
-nothing about the *procedure*. AC-2 is what establishes that the ordering rules
-are load-bearing rather than superstition — the same reason
-[Lab 7](../lab7/README.md)'s `lock_timeout` criterion needs its negative control,
-and the same reason `test_sync` runs its mutation test with
-`synchronous_mode_strict` on and off.
+nothing about the *procedure*. It also produces the directly useful output: a
+measured cost for each wrong move, which is what turns "one node at a time" into
+an instruction someone follows at 02:00 rather than an unexplained rule.
 
-It is also the criterion that produces something directly useful: a measured cost
-for each wrong move, which is what makes "one node at a time" an instruction
-someone will actually follow at 02:00 rather than an unexplained rule.
+**AC-4 is where a marginal dependency surfaces.** Surviving a reboot was proven
+once, as a property; patching makes it a routine, and routine is where luck runs
+out — a `crypttab` entry that works until the keyfile's filesystem mounts a little
+later, a unit ordering that held by accident. `softdog` is the sharpest case:
+persistence *is* configured here, by a `modules-load.d` entry, so the question is
+not whether someone forgot but whether a kernel update replaced the kernel the
+module was built for. AC-4 distinguishes those two.
 
-### AC-4 is where Lab 2 gets audited
+**AC-6 is the one usually skipped.** Patching procedures are written for the case
+where the package installs. The interesting question is what an operator does at
+23:00 when it does not, and whether the answer requires rebuilding the node —
+which here means a `reinit` and a full resync, hours where minutes were needed.
 
-Lab 2 proved a node survives a reboot. It proved it **once**, as a property.
-Patching turns that into a routine, and routine is where a marginal dependency
-surfaces: a `crypttab` entry that works until the keyfile's filesystem mounts a
-little later, a `softdog` module loaded by something that a kernel update
-replaced, a unit ordering that held by luck.
-
-### AC-6 is the one usually skipped
-
-Patching procedures are written for the case where the package installs. The
-interesting question is what an operator does at 23:00 when it does not, and
-whether the answer requires rebuilding a node — which on this cluster means a
-`reinit` from the primary and a resync of the whole data directory, hours where
-minutes were needed.
-
-## Notes specific to this cluster
-
-- **Never patch two nodes in parallel.** With `synchronous_node_count: 1`, one
-  standby may be down freely; the second stops writes. This is the same
-  constraint [runbook 8](../RUNBOOKS.md#8-planned-switchover) states for
-  maintenance, and this lab is where it gets measured instead of asserted.
-- **Check `pending_restart` before and after.** Patroni exposes
-  `patroni_pending_restart`, and a configuration change that requires a restart
-  can sit unapplied indefinitely. [Lab 5](../lab5/README.md) alerts on it; this
-  lab is the operation that clears it.
-- **`softdog` is not automatically persistent.** If it is loaded by hand rather
-  than by a `modules-load.d` entry, the first kernel reboot removes it and the
-  node quietly becomes ineligible for promotion. This is worth asserting during
-  the lab rather than discovering during a failover.
-- **A switchover needs a healthy cluster.** The precondition in runbook 8 — one
-  leader, two `streaming` standbys — applies at step 3, so a patch run that has
-  left a standby down must not proceed to the switchover.
-- **etcd and PostgreSQL are patched on different schedules.** They share a node
-  but not a lifecycle, and doing both at once means an unhealthy DCS at exactly
-  the moment Patroni is being asked to move a leader.
+**AC-8 decides whether any of the others get followed.** An alerting system that
+fires through every maintenance window teaches people to ignore it, and they stop
+reading at exactly the wrong moment. Lab 5's alerts fire between 130s and 260s
+and several patch steps take longer than that, so silence is not automatic: it
+has to be designed for and verified. If a correct cycle cannot be made quiet,
+that is a finding about the thresholds, and better learned here than at 03:00.
 
 ## What this contributes back
 
-[`RUNBOOKS.md`](../RUNBOOKS.md) has no rolling-maintenance procedure. It has
-[runbook 8](../RUNBOOKS.md#8-planned-switchover), which is one step of it, marked
-VERIFIED because a drill performs it. This lab is what would let a full
-"patch the cluster" procedure be added and marked VERIFIED rather than REASONED —
-the same relationship [Lab 4](../lab4/README.md) has to the total-loss stub.
+[`RUNBOOKS.md`](../RUNBOOKS.md) has no rolling-maintenance procedure — only
+[runbook 8](../RUNBOOKS.md#8-planned-switchover), which is one step of it. This
+lab is what lets a full "patch the cluster" procedure be added and marked
+**VERIFIED**, with each ordering rule carrying the measured cost of breaking it.
 
-It also gives [`SLA.md`](../SLA.md) the planned-maintenance figure it currently
-records from a single switchover: the wall-clock cost of a complete patch cycle
-across three nodes, which is the number a change-advisory board actually asks
-for.
+[`SLA.md`](../SLA.md) gains the planned-maintenance figure it currently infers
+from a single switchover: the wall-clock cost of a complete patch cycle across
+three nodes, which is the number a change-advisory board actually asks for.
+
+Lab 5 gains `PendingRestart`, the alert it lacks, proven in the same lab as the
+operation that clears it.
