@@ -1,0 +1,102 @@
+namespace: {{ lab6_patroni_namespace }}
+scope: {{ lab6_cluster_name }}
+name: {{ lab6_node_name }}
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: {{ lab6_node_ip }}:8008
+  # verify_client: required makes this mutual. Patroni also uses these same
+  # files as its *client* certificate when polling other members' REST APIs,
+  # which is why the patroni identity carries both serverAuth and clientAuth.
+  certfile: {{ lab6_pki_dir }}/patroni.crt
+  keyfile: {{ lab6_pki_dir }}/patroni.key
+  cafile: {{ lab6_pki_dir }}/ca.crt
+  verify_client: required
+  # GET stays cert-only, so scraping /metrics needs no password. PUT, POST, PATCH
+  # and DELETE need this as well -- which is the difference between an agent that
+  # can read the cluster and one that can fail it over.
+  authentication:
+    username: patroni
+    password: {{ patroni_restapi_password | to_json }}
+
+# patronictl runs as a client of the REST API above. Without this section every
+# patronictl invocation in the playbooks and test scripts fails the moment
+# verify_client is required.
+ctl:
+  certfile: {{ lab6_pki_dir }}/patroni.crt
+  keyfile: {{ lab6_pki_dir }}/patroni.key
+  cacert: {{ lab6_pki_dir }}/ca.crt
+  insecure: false
+
+etcd3:
+  hosts: {% for host in groups['patroni_nodes'] %}{{ hostvars[host].lab6_node_ip }}:2379{% if not loop.last %},{% endif %}{% endfor %}
+
+  protocol: https
+  cacert: {{ lab6_pki_dir }}/ca.crt
+  # A dedicated client identity, not the etcd server certificate: clientAuth
+  # only, so it cannot be replayed to impersonate an etcd member.
+  cert: {{ lab6_pki_dir }}/dcs-client.crt
+  key: {{ lab6_pki_dir }}/dcs-client.key
+
+postgresql:
+  cluster_name: {{ lab6_cluster_name }}
+  listen: 0.0.0.0:5432
+  connect_address: {{ lab6_node_ip }}:5432
+  data_dir: {{ lab6_postgres_data_dir }}
+  bin_dir: {{ lab6_postgres_bin_dir }}
+  pgpass: /var/lib/pgsql/.pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: {{ postgres_replication_password | to_json }}
+      # Streaming replication crosses the network, so the replica verifies the
+      # primary rather than merely encrypting to it. The primary's certificate
+      # carries its IP in the SAN, which is what verify-full matches against.
+      sslmode: verify-full
+      sslrootcert: {{ lab6_pki_dir }}/ca.crt
+    superuser:
+      username: postgres
+      password: {{ postgres_superuser_password | to_json }}
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+  # pgbackrest FIRST, basebackup as the fallback. Rebuilding a standby from the
+  # primary loads the primary under exactly the conditions that caused the node
+  # to be lost -- and on a large database it is the difference between a rebuild
+  # that costs the cluster nothing and one that costs it its remaining headroom.
+  # The repository already holds everything needed, and is not on the write path.
+  #
+  # keep_data, because --delta reuses whatever is already on disk instead of
+  # transferring it again. no_params, because Patroni would otherwise append its
+  # own arguments to a command that already knows what it is doing.
+  create_replica_methods:
+    - pgbackrest
+    - basebackup
+  pgbackrest:
+    command: /usr/bin/pgbackrest --stanza={{ lab6_cluster_name }} --delta restore
+    keep_data: True
+    no_params: True
+  basebackup:
+    checkpoint: fast
+
+watchdog:
+  mode: required
+  device: /dev/watchdog
+  safety_margin: 5
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
+
+# Keep this block last. Jinja drops the included file's trailing newline, so any
+# key rendered after the include would be appended to its final line instead of
+# starting its own. At end of file there is nothing to corrupt.
+bootstrap:
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  dcs:
+{% filter indent(4, true) %}
+{% include 'patroni-dcs.yml.j2' %}
+{% endfilter %}

@@ -131,9 +131,11 @@ distributed configuration. `patroni.yml.j2` includes it for the one-time
 `bootstrap.dcs` block, and `playbooks/bootstrap.yml` applies the same file to the
 running cluster with `patronictl edit-config`, so the two paths cannot drift.
 
-pgBackRest is carried over from Lab 1 unchanged: local per-node repositories that
-prove installation, stanza configuration and WAL archiving, but are not a durable
-backup design. Moving them off the database VM and encrypting them is Lab 4.
+pgBackRest writes to an **off-host, encrypted** repository: `repo1-type=s3`
+against MinIO on the control machine, with `repo1-cipher-pass` set. Labs 1 and 2
+used local per-node repositories, which prove installation, stanza configuration
+and WAL archiving but are not a durable backup design; Lab 3 moved them off the
+database VM and encrypted them, and every lab since inherits that.
 
 ## The application host
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh pgBackRest repository health
+
+[Timer]
+OnBootSec=2min
+# Every minute. `verify` on this repository takes seconds; on a large one it
+# would need its own slower schedule, which is a production-gap note rather than
+# a lab problem.
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

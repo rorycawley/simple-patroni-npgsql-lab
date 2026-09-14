@@ -1,0 +1,266 @@
+name: never-heals
+interval: 15s
+rules:
+  # Writes blocked on synchronous replication.
+  #
+  # `ANY 1 (*)` is Patroni's unsatisfiable placeholder and cannot occur on a
+  # healthy cluster, so this has no false-positive mode. `for: 1m` covers the
+  # seconds it legitimately holds that value during a failover.
+  - alert: WritesBlockedOnSyncReplication
+    expr: lab6_sync_unsatisfiable == 1
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "1"
+    annotations:
+      summary: "{{ $labels.node }}: writes are blocked on synchronous replication"
+      description: >-
+        synchronous_standby_names is Patroni's unsatisfiable placeholder, so no
+        commit can be acknowledged. Nothing recovers this on its own.
+        RUNBOOKS.md procedure 1.
+
+  # Archiving has stopped, which is where a backup regime dies quietly.
+  #
+  # Scoped to the primary with patroni_primary: archiving is the primary's
+  # job, and a standby's pg_stat_archiver never moves -- so without this the
+  # alert would fire on every standby forever.
+  #
+  # Rate, not absolute count: the counters are cumulative and survive a role
+  # change, measured in Lab 3 where a standby carried failed_count=4 from
+  # when it was primary.
+  - alert: ArchivingFailing
+    expr: rate(lab6_archiver_failed_count[5m]) > 0 and on(node) patroni_primary == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: WAL archiving is failing"
+      description: >-
+        archive_command is failing, so WAL cannot be recycled and the backup
+        regime has stopped advancing. Begins as a backup problem and ends as
+        an outage. RUNBOOKS.md procedure 6.
+
+  # The same incident seen from the other side: nothing has been archived for
+  # far longer than archive_timeout, which is 60s in this cluster.
+  - alert: NothingArchivedRecently
+    expr: lab6_archiver_seconds_since_archived > 300 and on(node) patroni_primary == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: no WAL archived for over 5 minutes"
+      description: >-
+        archive_timeout is 60s, so a gap this long means archiving is not
+        merely slow. RUNBOOKS.md procedure 6.
+
+  # AC-3's other half: backups that ROT rather than stop.
+  #
+  # verify_ok is read from pgbackrest verify's OUTPUT, because its exit code is 0
+  # on a corrupted repository -- measured in Lab 4. An alert built on the exit
+  # code would be incapable of firing, which is the failure this whole series
+  # keeps finding.
+  - alert: RepositoryDoesNotVerify
+    expr: lab6_repo_verify_ok == 0
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: the backup repository does not verify"
+      description: >-
+        pgBackRest reported invalid results or status: error. The backups are
+        present and not trustworthy, which is worse than their being absent.
+
+  # Nobody is reporting on the repository at all. Distinct from "the repository
+  # is bad": this is silence, and silence looks exactly like health.
+  - alert: RepositoryHealthUnreported
+    expr: absent(lab6_repo_verify_ok)
+    for: 5m
+    labels:
+      severity: critical
+      runbook: "6"
+    annotations:
+      summary: "No node is reporting repository health"
+      description: >-
+        The metrics writer runs on whichever node holds the leader key. If none
+        is reporting, either no node holds it or the writer is failing on all of
+        them. Absence of a complaint is not the same as a clean bill of health.
+
+  # The leader gate could not determine whether this node should be doing
+  # repository work. Its third exit state exists precisely so this is visible
+  # rather than being silently treated as "not the leader".
+  - alert: RepositoryLeaderUndetermined
+    expr: lab6_repo_metrics_leader == -1
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "2"
+    annotations:
+      summary: "{{ $labels.node }}: cannot tell whether this node is the leader"
+      description: >-
+        Patroni could not be reached to answer it. Treating that as "not the
+        leader" is how every node declines to work and nothing reports an error.
+
+  - alert: BackupTooOld
+    expr: lab6_repo_last_backup_age_seconds > 3600
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: newest backup is over an hour old"
+
+  # The backlog, not the file count in pg_wal: measured in Lab 3, that count
+  # stayed at 32 while archiving was demonstrably broken, because PostgreSQL
+  # recycles a preallocated pool.
+  - alert: ArchiveBacklogGrowing
+    expr: lab6_wal_archive_backlog_segments > 10
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "6"
+    annotations:
+      summary: "{{ $labels.node }}: {{ $value }} WAL segments awaiting archive"
+
+  # AC-5: the pipeline watches itself.
+  #
+  # A stopped agent is the monitoring system's own silent failure, and silence
+  # looks exactly like health -- the same shape as `pgbackrest verify` exiting 0,
+  # or a check satisfied by an empty bucket. up==0 catches an agent that is
+  # answering badly; absent() catches one that has stopped answering at all, and
+  # those are different failures.
+  - alert: AlloyNotReporting
+    # NOT `up == 0`. Alloy scrapes ITSELF, so a stopped agent does not report a
+    # failed scrape -- it stops reporting at all, and the last value it sent (1)
+    # persists through the query lookback. Measured: with Alloy stopped on a node,
+    # up{job="integrations/self"} still read 1 for that node. AN AGENT CANNOT
+    # REPORT ITS OWN DEATH; the absence has to be noticed by the store.
+    #
+    # So this asks how long ago the node last said anything, which is a question
+    # only the store can answer.
+    # Faster than the count below, and NARROWER: once a node's series ages out of
+    # the lookback entirely it disappears from `max by (node)`, the expression
+    # yields nothing for it, and this alert silently RESOLVES while the node is
+    # still dead. It is the early warning, not the durable one.
+    expr: time() - max by (node) (timestamp(up{job="integrations/self"})) > 120
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "0"
+    annotations:
+      summary: "{{ $labels.node }}: no metrics for over two minutes; the agent has gone quiet"
+
+  - alert: NodeNotReporting
+    # The DURABLE detector, and the reason it counts against a fixed 3 rather than
+    # comparing to itself: a node that has gone completely quiet contributes
+    # nothing to any expression about it, so the only way to notice is to know how
+    # many there should be. Slower -- a stopped node takes the lookback window to
+    # drop out -- and it does not resolve itself while the node is still gone.
+    expr: count(count by (node) (up == 1)) < 3
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "0"
+    annotations:
+      summary: "Fewer than three nodes are reporting any metrics at all"
+      description: >-
+        A node that stops shipping goes quiet, and quiet is indistinguishable
+        from healthy unless something counts. This counts.
+
+  # AC-2 in full. "No leader anywhere" has THREE causes that look identical from
+  # patronictl -- paused, etcd quorum lost, and a node unable to arm its watchdog
+  # -- so there are three alerts. One saying "no leader" would send the reader to
+  # a page that cannot tell them which of three procedures to follow.
+
+  - alert: ClusterPaused
+    # Automatic failover is OFF and the cluster looks perfectly healthy. Nothing
+    # else in this lab would notice; runbook 3 exists because someone forgot.
+    expr: max(patroni_is_paused) == 1
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "3"
+    annotations:
+      summary: "Patroni is PAUSED: automatic failover is disabled"
+      description: >-
+        The cluster will not promote anything if the primary dies. It looks
+        healthy because it is healthy -- until it is not.
+
+  - alert: EtcdQuorumLost
+    # Two of three must be running. One survivor cannot form a majority and goes
+    # read-only by design.
+    expr: count(up{job="etcd"} == 1) < 2
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "4"
+    annotations:
+      summary: "etcd has lost quorum: {{ $value }} of 3 members reachable"
+      description: >-
+        Patroni cannot write to the DCS, so the cluster is read-only regardless
+        of how healthy PostgreSQL is.
+
+  - alert: NoLeaderAnywhere
+    # The symptom shared by all three causes. Fired alongside ClusterPaused or
+    # EtcdQuorumLost it is a consequence; fired ALONE it is the watchdog case --
+    # a node that cannot arm softdog refuses to be primary at all.
+    # Counts FRESH reports of a primary, not `min(patroni_cluster_unlocked)`.
+    # That first attempt could never fire: the frozen leader's last published
+    # value was `unlocked=0`, which persists through the query lookback, so the
+    # minimum stayed 0 while the cluster had no leader at all. Third time this
+    # staleness trap has appeared in this lab -- a dead node keeps answering with
+    # whatever it last said.
+    #
+    # `or vector(0)` is not decoration: count() over an empty vector returns NO
+    # SAMPLES, so `count(...) == 0` would never produce a series to alert on.
+    expr: (count((patroni_primary == 1) and (time() - timestamp(patroni_primary) < 90)) or vector(0)) == 0
+    for: 2m
+    labels:
+      severity: critical
+      runbook: "2"
+    annotations:
+      summary: "No node holds the leader key"
+      description: >-
+        If neither ClusterPaused nor EtcdQuorumLost is also firing, suspect the
+        watchdog: grep the journal for 'Watchdog device is not usable'.
+
+  - alert: PostgresNotRunning
+    expr: patroni_postgres_running == 0
+    for: 2m
+    labels:
+      severity: warning
+      runbook: "5"
+    annotations:
+      summary: "{{ $labels.node }}: Patroni reports PostgreSQL is not running"
+
+  - alert: PatroniLostDcs
+    # A node that cannot see etcd demotes itself rather than diverging. That is
+    # correct behaviour and still worth knowing about.
+    expr: time() - max by (node) (patroni_dcs_last_seen) > 60
+    for: 2m
+    labels:
+      severity: warning
+      runbook: "4"
+    annotations:
+      summary: "{{ $labels.node }}: has not reached the DCS for over a minute"
+
+  - alert: PatroniNotScrapable
+    # A node whose PATRONI has died, as distinct from one whose PostgreSQL has.
+    # Faults that damage the data directory kill Patroni too -- it reads
+    # pg_control at startup and exits on a cluster-identity mismatch -- and a dead
+    # Patroni serves no /metrics at all, so `patroni_postgres_running` goes ABSENT
+    # rather than 0. Nothing else here would notice: Alloy is still running and
+    # still shipping node metrics, so the node looks alive.
+    expr: up{job="patroni"} == 0
+    for: 1m
+    labels:
+      severity: critical
+      runbook: "5"
+    annotations:
+      summary: "{{ $labels.node }}: Patroni is not answering its metrics endpoint"
+      description: >-
+        The agent on this node is fine, so the node looks alive. Patroni itself is
+        not running -- check the journal for 'system ID mismatch' or a data
+        directory fault. RUNBOOKS.md procedure 5.

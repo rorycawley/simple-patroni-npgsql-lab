@@ -1,0 +1,18 @@
+---
+# `make all` configures the cluster and then immediately runs fault injection,
+# and `test_failover_vm` force-stops a VM, which is a power cut rather than a
+# shutdown. Recently written files can survive that with their metadata intact
+# but their data lost: a config file rewritten moments earlier comes back
+# zero-length, and Patroni then crash-loops on "does not contain a dict".
+#
+# Ansible's template module renames a temp file into place, which is atomic but
+# says nothing about the data reaching the virtual disk. Flushing here closes
+# the window between configuring a node and deliberately pulling its power.
+- name: Flush configuration to disk before any fault injection
+  hosts: patroni_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Flush filesystem buffers on every node
+      ansible.builtin.command: sync
+      changed_when: false

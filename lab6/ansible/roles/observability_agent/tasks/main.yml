@@ -1,0 +1,121 @@
+---
+# Alloy ships this node's telemetry to the stack on the control machine.
+#
+# It is deliberately a ONE-WAY relationship. Alloy pushes; nothing scrapes it
+# from outside, so the drop-zone firewall needs no new inbound rule, and the
+# monitoring stack being down cannot block anything here. That is the property
+# Lab 6 must not break: a database that stops serving because its observer went
+# away has been made less available by being watched.
+
+- name: Import Grafana's RPM packaging key
+  ansible.builtin.rpm_key:
+    key: https://rpm.grafana.com/gpg.key
+    state: present
+
+- name: Define the Grafana repository
+  ansible.builtin.yum_repository:
+    name: grafana
+    description: Grafana OSS packages
+    baseurl: https://rpm.grafana.com
+    gpgcheck: true
+    gpgkey: https://rpm.grafana.com/gpg.key
+    enabled: true
+
+- name: Install Alloy
+  ansible.builtin.dnf:
+    name: alloy
+    state: present
+
+# Installed HERE, not by tls_material, because that role runs before this one and
+# the `alloy` user does not exist until the package above is installed. A role
+# that owns its own identity is also easier to reason about than one whose
+# credentials appear from somewhere earlier in the play.
+- name: Install Alloy's client certificate
+  ansible.builtin.copy:
+    src: "{{ lab6_pki_source }}/{{ lab6_node_name }}-alloy.{{ item.ext }}"
+    dest: "{{ lab6_pki_dir }}/alloy.{{ item.ext }}"
+    owner: alloy
+    group: alloy
+    mode: "{{ item.mode }}"
+  loop:
+    - { ext: crt, mode: "0644" }
+    - { ext: key, mode: "0600" }
+  loop_control:
+    label: "alloy.{{ item.ext }}"
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
+- name: Create the textfile collector directory
+  ansible.builtin.file:
+    path: "{{ lab6_textfile_dir }}"
+    state: directory
+    owner: postgres
+    group: alloy
+    mode: "0775"
+
+- name: Install the repository metrics writer
+  ansible.builtin.template:
+    src: lab6-repo-metrics.j2
+    dest: "{{ lab6_backup_bin_dir }}/lab6-repo-metrics"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the repository metrics timer
+  ansible.builtin.template:
+    src: "lab6-repo-metrics.{{ item }}.j2"
+    dest: "/etc/systemd/system/lab6-repo-metrics.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+
+- name: Enable the repository metrics timer
+  ansible.builtin.systemd:
+    name: lab6-repo-metrics.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Install the custom PostgreSQL queries
+  ansible.builtin.copy:
+    src: pg-queries.yaml
+    dest: /etc/alloy/pg-queries.yaml
+    owner: alloy
+    group: alloy
+    mode: "0644"
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
+- name: Configure Alloy
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
+# `alloy` runs unprivileged by default and cannot read the journal, so the unit
+# is given the one group that grants it. Without this it starts, reports healthy,
+# and ships no logs at all -- the failure this lab exists to notice, in its own
+# agent.
+- name: Let Alloy read the system journal
+  ansible.builtin.user:
+    name: alloy
+    groups: systemd-journal
+    append: true
+  notify:
+    - Check whether Alloy is already running
+    - Restart Alloy
+
+- name: Enable and start Alloy
+  ansible.builtin.systemd:
+    name: alloy
+    enabled: true
+    state: started
+    daemon_reload: true

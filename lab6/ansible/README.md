@@ -1,11 +1,11 @@
-# Lab 3 Ansible
+# Lab 6 Ansible
 
 This automation turns four Rocky Linux 9.8 Lima VMs into a Patroni-managed
 Percona PostgreSQL 18 cluster on encrypted volumes, reachable only over TLS, plus
 an application host that runs the .NET client.
 
 What each lab's automation claims and proves is in the
-[Lab 3 guide](../README.md). This file covers how it is applied.
+[Lab 6 guide](../README.md). This file covers how it is applied.
 
 ## Order
 
@@ -15,11 +15,11 @@ design:
 | Playbook | Does |
 | --- | --- |
 | `install.yml` | `data_volumes` then `postgres_node` |
-| `configure.yml` | `tls_material`, `cluster_config`, then `backup_jobs` |
+| `configure.yml` | `tls_material`, `cluster_config`, `backup_jobs`, then `observability_agent` |
 | `start-etcd.yml` | Forms the etcd cluster over mutual TLS |
 | `bootstrap.yml` | Reconciles Patroni's distributed configuration |
 | `create-app.yml` | Creates `appdb`, `app_runtime`, and the probe table |
-| `app-client.yml` | Provisions `lab3-app1` with the client, the CA, and the password file |
+| `app-client.yml` | Provisions `lab6-app1` with the client, the CA, and the password file |
 | `flush-disks.yml` | `sync`, so a force-stopped VM does not lose a written config file |
 
 Two of those orderings are load-bearing:
@@ -29,6 +29,21 @@ Two of those orderings are load-bearing:
   would be hidden by it rather than stored on the volume.
 - **`tls_material` before `cluster_config`.** The Patroni, etcd and PostgreSQL
   templates all reference certificate paths that must already exist.
+- **`observability_agent` last.** It scrapes Patroni, etcd and PostgreSQL over
+  mutual TLS, so every endpoint it points at has to exist and be listening
+  first. An agent configured against a socket nobody is serving reports the
+  node as down, which is indistinguishable from the fault it exists to detect.
+
+`roles/backup_jobs` installs the pgBackRest timers — inherited from Lab 3, and
+leader-gated, so only the node holding the leader key takes a backup.
+
+`roles/observability_agent` is inherited from Lab 5, which introduced it: it
+installs Alloy, its scrape configuration, and the repository-metrics timer.
+Alloy holds a **clientAuth-only** certificate of its own rather than Patroni's,
+because Patroni's identity also serves the REST API — see
+[`SERVICE-ACCOUNTS.md`](../../SERVICE-ACCOUNTS.md). It reads logs from the
+journal, so it never needs the `postgres` group, and it pushes metrics and logs
+out to the control machine rather than being scraped.
 
 ## Forming the etcd cluster
 
@@ -62,7 +77,7 @@ kernel name, because device naming is not stable across boots. It then:
   device is not already a LUKS container, so a rerun is a no-op rather than a
   reformat;
 - records the LUKS UUID in `/etc/crypttab` for unattended unlock at boot; and
-- installs `lab3-require-volume`, a guard the service units call from
+- installs `lab6-require-volume`, a guard the service units call from
   `ExecStartPre`.
 
 That guard is the second of two independent layers. `RequiresMountsFor=` makes
@@ -139,7 +154,7 @@ database VM and encrypted them, and every lab since inherits that.
 
 ## The application host
 
-`roles/app_client` installs the client on `lab3-app1` as a self-contained
+`roles/app_client` installs the client on `lab6-app1` as a self-contained
 `linux-arm64` binary cross-published from the control machine, so the guest needs
 neither the SDK nor the runtime. It also installs `libicu`, without which .NET
 aborts before `Main`, and the CA certificate the client verifies the cluster
@@ -171,7 +186,7 @@ depend on that tool's repository discovery.
 
 ## Run
 
-From `lab3`:
+From `lab6`:
 
 ```sh
 make all
@@ -185,5 +200,5 @@ SELinux and pgBackRest checks, then runs a real Npgsql primary-only read/write
 test from the application VM.
 
 Run `make configure_hostnames` in an interactive terminal if you also want
-`pg1.lab3.example`, `pg2.lab3.example`, `pg3.lab3.example` and `app1.lab3.example`
+`pg1.lab6.example`, `pg2.lab6.example`, `pg3.lab6.example` and `app1.lab6.example`
 in macOS `/etc/hosts`.

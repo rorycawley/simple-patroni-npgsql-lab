@@ -1,0 +1,9 @@
+[Unit]
+Description=Write pgBackRest repository health to the textfile collector
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart={{ lab6_backup_bin_dir }}/lab6-repo-metrics

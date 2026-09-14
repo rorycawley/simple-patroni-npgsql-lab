@@ -23,7 +23,7 @@
 # what is stopped alone.
 - name: Check whether Patroni is already running
   ansible.builtin.command: systemctl is-active --quiet percona-patroni
-  register: lab5_patroni_running
+  register: lab6_patroni_running
   failed_when: false
   changed_when: false
 
@@ -31,4 +31,4 @@
   ansible.builtin.systemd:
     name: percona-patroni
     state: reloaded
-  when: lab5_patroni_running.rc == 0
+  when: lab6_patroni_running.rc == 0

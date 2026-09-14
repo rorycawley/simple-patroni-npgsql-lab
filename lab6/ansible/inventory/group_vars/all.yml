@@ -1,0 +1,136 @@
+---
+lab6_cluster_name: lab6
+lab6_patroni_namespace: /service/
+lab6_postgres_data_dir: /var/lib/pgsql/data
+# Where a restored copy goes. Its own encrypted volume, never beneath
+# /var/lib/pgsql: restoring under the live data directory is how a recovery
+# damages the thing it is recovering.
+lab6_restore_dir: /var/lib/pgsql-restore
+lab6_postgres_bin_dir: /usr/pgsql-18/bin
+
+# The two versions this lab is about. The cluster is BUILT on the first and
+# PATCHED to the second, which is why it pins where every earlier lab took
+# whatever was newest. Percona ships 18.1, 18.3, 18.4 and 18.6 for el9, and all
+# 21 percona-postgresql18-* packages exist at both of these, so the pin is
+# coherent across the whole family rather than just the server package.
+#
+# Both are asserted installable in P0, before anything is built on them. When
+# Percona eventually drops 18.4, that assertion fails at the start of a run with
+# both versions named, rather than leaving a cluster half-patched.
+lab6_pg_version: "18.4"
+lab6_pg_target_version: "18.6"
+lab6_etcd_data_dir: /var/lib/etcd/lab6
+
+# Each service's data directory sits on its own block device. Sizes must stay
+# distinct from each other and from the root disk: the guest resolves which
+# device is which by size, because attachment order is not a contract.
+lab6_volume_fstype: xfs
+lab6_config_dir: /etc/lab6
+lab6_luks_key_dir: "{{ lab6_config_dir }}/luks"
+
+# TLS material. One certificate per purpose rather than one per node, so that a
+# stolen key for one service cannot authenticate as another. The owner is the
+# service that reads the key: PostgreSQL and etcd both refuse to start on a key
+# that is group- or world-readable.
+lab6_pki_dir: "{{ lab6_config_dir }}/pki"
+# etcd requires a client certificate once client-cert-auth is on, so every
+# etcdctl invocation needs these. Defined once rather than per call site.
+lab6_etcdctl_tls: >-
+  --cacert {{ lab6_pki_dir }}/ca.crt
+  --cert {{ lab6_pki_dir }}/etcd.crt
+  --key {{ lab6_pki_dir }}/etcd.key
+# Backup repository (Lab 6). The object store runs on the control machine and is
+# reached at the Lima shared-network gateway -- the same address the firewall
+# already permits for psql debugging. Port 9400: 9000 is the sibling lab's,
+# 9100 is Lab 3's, 9200 is Lab 4's, 9300 is Lab 5's, and a lab that cannot be
+# built while another runs is not standalone.
+lab6_repo_bucket: lab6-backups
+lab6_repo_path: /pgbackrest
+lab6_repo_endpoint: "{{ lab6_host_gateway_ip }}"
+lab6_repo_port: 9400
+lab6_repo_region: us-east-1
+
+# The monitoring stack, on the control machine beside the object store. Alloy
+# pushes to these; nothing here is scraped from outside.
+lab6_loki_port: 3100
+lab6_mimir_port: 9009
+
+# The metrics role. pg_monitor is a built-in role granting read access to the
+# statistics views and nothing else -- it cannot read table data.
+lab6_monitor_role: lab6_monitor
+lab6_textfile_dir: /var/lib/lab6/textfile
+lab6_repo_uri_style: path
+
+# The backup job. Installed on all three nodes; the leader gate decides which
+# one actually runs it. Intervals are compressed so a single `make all` run
+# observes a real chain -- a full plus incrementals -- rather than one backup.
+# A production cluster would take the full weekly and incrementals nightly.
+lab6_backup_bin_dir: /usr/local/lib/lab6
+lab6_patroni_rest_port: 8008
+lab6_backup_full_on_boot: 90s
+lab6_backup_full_interval: 30min
+lab6_backup_incr_on_boot: 3min
+lab6_backup_incr_interval: 2min
+
+# The logical dump. Its prefix sits OUTSIDE repo1-path so pgBackRest's retention
+# can never reap it -- which also makes expiring old dumps this lab's own job.
+lab6_appdb_name: appdb
+lab6_dump_prefix: dumps
+lab6_dump_pass_file: "{{ lab6_config_dir }}/dump.pass"
+lab6_dump_retention: 3
+lab6_dump_on_boot: 2min
+lab6_dump_interval: 10min
+
+lab6_app_dir: /opt/lab6-client
+lab6_app_secrets_dir: /etc/lab6/client
+lab6_app_publish_dir: "{{ playbook_dir }}/../../client/publish/linux-arm64"
+lab6_pki_source: "{{ playbook_dir }}/../../.secrets/pki"
+lab6_tls_identities:
+  - name: postgres
+    owner: postgres
+  - name: patroni
+    owner: postgres
+  - name: dcs-client
+    owner: postgres
+  - name: etcd
+    owner: etcd
+lab6_data_volumes:
+  - name: pgdata
+    path: /var/lib/pgsql
+    gib: 10
+  - name: etcd
+    path: /var/lib/etcd
+    gib: 5
+  # Somewhere to restore to. A restored copy is a COMPLETE copy of production and
+  # does not become less sensitive by being a copy, so it gets the same treatment
+  # as the data directory rather than landing on the root filesystem. Sized like
+  # pgdata because that is exactly what it holds. Distinct from every other size:
+  # the guest identifies devices by size, not by attachment order.
+  - name: restore
+    path: "{{ lab6_restore_dir }}"
+    gib: 12
+lab6_lima_management_cidr: 192.168.5.0/24
+
+# The macOS side of Lima's managed shared network. It is the only non-cluster
+# source allowed to reach PostgreSQL, in both the firewall and pg_hba, so a wrong
+# value locks the client out with a bare connection timeout. Lima puts macOS on
+# <shared subnet>.1, which the playbooks derive from the VM addresses; set this
+# override if your Lima network uses a different gateway address.
+lab6_host_gateway_ip_override: ""
+
+# The application VM is where the client now runs, so that is what must reach
+# PostgreSQL. The macOS gateway stays allowed for psql debugging: it uses
+# OpenSSL and can negotiate TLS 1.3, unlike .NET on macOS.
+lab6_postgres_client_cidrs:
+  - "{{ hostvars[groups['app_nodes'][0]].lab6_node_ip }}/32"
+  - "{{ lab6_host_gateway_ip }}/32"
+
+lab6_firewall_interfaces:
+  - eth0
+  - lima0
+
+lab6_cluster_ports:
+  - 2379 # etcd client
+  - 2380 # etcd peer
+  - 5432 # PostgreSQL and streaming replication
+  - 8008 # Patroni REST API
