@@ -620,6 +620,16 @@ is merely locked is how a working set of backups gets destroyed.
 **Status: REASONED. TLS clusters only** — Lab 1 runs without TLS and cannot
 reach this state; Labs 2 and 3 can.
 
+> **What tells you: nothing does.** This is the one incident in this file with
+> no alert behind it. [Lab 5](lab5/README.md) has sixteen rules and not one
+> watches a certificate's expiry date, because nothing in the cluster exports
+> it. You would meet this as the symptom below — everything failing at once,
+> looking like a network fault — which is the worst way to meet it, since it is
+> the one outage here that is entirely preventable by watching a number.
+> Expiry monitoring is a named production gap in the
+> [top-level README](README.md), and closing it is worth more than this
+> procedure is.
+
 ## Symptom
 
 Everything fails at once and it looks like a network fault: replication stops,
@@ -887,6 +897,14 @@ encrypted volumes and every local secret, then rebuilds from the repository
 alone. Measured: **2s restore, 0s replay, 450s from destruction to a redundant
 three-node cluster, 0 rows lost.** Those seconds are not representative; the
 database is small. The *shape* is.
+
+> **What tells you:** everything at once — `NodeNotReporting` and
+> `AlloyNotReporting` per node (about 150s and 250s), `NoLeaderAnywhere` (190s),
+> `PostgresNotRunning`, and then `NothingArchivedRecently` as the archive stops
+> advancing. That breadth **is** the signal: a single node failing produces one
+> or two of these, and all of them together is the shape of total loss. Note the
+> monitoring stack runs on the control machine, so it survives the cluster and
+> can still tell you — which is the whole reason it lives there.
 
 ## What has to survive
 

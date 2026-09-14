@@ -296,9 +296,9 @@ else does, on purpose.
 
 ## What this contributes back
 
-[`SLA.md`](../SLA.md) records the row for corruption, deletion and a bad
+[`SLA.md`](../SLA.md) recorded the row for corruption, deletion and a bad
 migration as *"bounded by backup age and WAL archive interval"*, with the RTO
-**not established** and sourced to "Labs 3, 4, 8 — not built". This lab supplies
+**not established** and sourced to "Labs 3, 4, 8 — not built". This lab supplied
 the first half of that row.
 
 With a backup history that exists and an archive that keeps up with the primary,
@@ -307,7 +307,9 @@ the recoverable window stops being bounded by *backup age* and becomes bounded b
 [`WHY_PGBACKREST_AND_PGDUMP.md`](../WHY_PGBACKREST_AND_PGDUMP.md#wal-archiving-is-the-part-that-actually-bounds-data-loss).
 AC-6 is what measures it instead of asserting it.
 
-The RTO half stays blank until [Lab 4](../lab4/README.md) measures a restore.
+The RTO half has since been filled in: [Lab 4](../lab4/README.md) measured a
+restore at every blast radius, and `SLA.md` now records **0s to ~7s of
+downtime, by rung** for that row rather than "not established".
 Taking a backup bounds what you could lose; only restoring one bounds how long
 you are down.
 

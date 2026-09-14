@@ -15,7 +15,7 @@ design:
 | Playbook | Does |
 | --- | --- |
 | `install.yml` | `data_volumes` then `postgres_node` |
-| `configure.yml` | `tls_material` then `cluster_config` |
+| `configure.yml` | `tls_material`, `cluster_config`, then `backup_jobs` |
 | `start-etcd.yml` | Forms the etcd cluster over mutual TLS |
 | `bootstrap.yml` | Reconciles Patroni's distributed configuration |
 | `create-app.yml` | Creates `appdb`, `app_runtime`, and the probe table |

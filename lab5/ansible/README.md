@@ -15,7 +15,7 @@ design:
 | Playbook | Does |
 | --- | --- |
 | `install.yml` | `data_volumes` then `postgres_node` |
-| `configure.yml` | `tls_material` then `cluster_config` |
+| `configure.yml` | `tls_material`, `cluster_config`, `backup_jobs`, then `observability_agent` |
 | `start-etcd.yml` | Forms the etcd cluster over mutual TLS |
 | `bootstrap.yml` | Reconciles Patroni's distributed configuration |
 | `create-app.yml` | Creates `appdb`, `app_runtime`, and the probe table |
@@ -29,6 +29,21 @@ Two of those orderings are load-bearing:
   would be hidden by it rather than stored on the volume.
 - **`tls_material` before `cluster_config`.** The Patroni, etcd and PostgreSQL
   templates all reference certificate paths that must already exist.
+- **`observability_agent` last.** It scrapes Patroni, etcd and PostgreSQL over
+  mutual TLS, so every endpoint it points at has to exist and be listening
+  first. An agent configured against a socket nobody is serving reports the
+  node as down, which is indistinguishable from the fault it exists to detect.
+
+`roles/backup_jobs` installs the pgBackRest timers — inherited from Lab 3, and
+leader-gated, so only the node holding the leader key takes a backup.
+
+`roles/observability_agent` is what makes this Lab 5 rather than Lab 4: it
+installs Alloy, its scrape configuration, and the repository-metrics timer.
+Alloy holds a **clientAuth-only** certificate of its own rather than Patroni's,
+because Patroni's identity also serves the REST API — see
+[`SERVICE-ACCOUNTS.md`](../../SERVICE-ACCOUNTS.md). It reads logs from the
+journal, so it never needs the `postgres` group, and it pushes metrics and logs
+out to the control machine rather than being scraped.
 
 ## Forming the etcd cluster
 

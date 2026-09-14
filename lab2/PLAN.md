@@ -41,7 +41,7 @@ not documented, so it was proven on a throwaway VM before any code was written:
 Each phase leaves the lab green before the next begins, so a regression is
 always attributable to the phase that introduced it.
 
-### P0 — Fork Lab 1
+### P0 — Fork Lab 1 — **done**
 
 **What.** `lab2/` becomes a working copy of Lab 1, renamed, with no behaviour
 change.
@@ -51,7 +51,7 @@ pgBackRest exactly as-is.
 against.
 **Done when.** `make all` in `lab2/` is 10/10 from scratch.
 
-### P1 — Separate volumes
+### P1 — Separate volumes — **done**
 
 **What.** `/var/lib/pgsql` and `/var/lib/etcd` move onto their own block devices.
 **How.** Two Lima disks per node via `limactl disk create` and `additionalDisks`.
@@ -65,7 +65,7 @@ next rebuild.
 **Done when.** The two paths report distinct devices, `make clean` leaves no
 disks behind, and `make check` is unchanged from P0.
 
-### P2 — LUKS
+### P2 — LUKS — **done**
 
 **What.** Both volumes become LUKS2, unlocked unattended at boot.
 **How.** Install `cryptsetup`, which the Rocky image does not ship. Then
@@ -81,7 +81,7 @@ service with its volume unmounted **refuses to start** — and a node rebooted b
 the existing softdog fencing scenario unlocks and rejoins with no operator
 action.
 
-### P3 — PKI
+### P3 — PKI — **done**
 
 **What.** A lab CA and four certificates per node.
 **How.** Port `generate-pki.sh` into `scripts/generate-pki.sh`, run after `.env`
@@ -99,7 +99,7 @@ cluster fault rather than a certificate one.
 **Done when.** Every certificate verifies against the CA with the expected EKU
 and SANs, and no `ca.key` exists on any guest.
 
-### P4 — TLS on etcd and Patroni
+### P4 — TLS on etcd and Patroni — **done**
 
 **What.** Channels 4–7: etcd client and peer, Patroni→etcd, Patroni REST — all
 mutual.
@@ -122,7 +122,7 @@ rather than merely unset. PostgreSQL's floor arrives in P5, but at
 TLSv1.2 rather than 1.3: .NET on macOS cannot negotiate TLS 1.3 at all, so
 pinning 1.3 would break the client this lab exists to exercise.
 
-### P5 — TLS on PostgreSQL and the client
+### P5 — TLS on PostgreSQL and the client — **done**
 
 **What.** Channels 1–3: application, streaming replication, Patroni's local
 connection.
@@ -135,7 +135,7 @@ otherwise fail on the old `SSL Mode=Disable`.
 **Done when.** A `SSL Mode=Disable` connection is refused, `pg_stat_ssl` confirms
 the client's own session is encrypted, and a wrong CA fails closed.
 
-### P6 — Verification
+### P6 — Verification — **done**
 
 **What.** `test_at_rest`, `test_in_transit`, `test_identity`, wired into
 `run-all.sh` and the Makefile.

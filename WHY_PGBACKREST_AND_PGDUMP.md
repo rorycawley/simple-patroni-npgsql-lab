@@ -223,8 +223,10 @@ Yes — in three places, none of which is disaster recovery:
 | After a migration that succeeded and was wrong | Restoring the affected tables without rewinding the whole cluster | [Lab 8](lab8/README.md), AC-3 |
 
 It is never the mechanism for recovering the cluster, and never used for
-point-in-time recovery. Note that all three are *specified*, not yet built — as
-above, neither tool is scheduled in Labs 1 and 2.
+point-in-time recovery. The first two rows are built and verified — Lab 3
+schedules the dumps and Lab 4 restores a single table from one. The third waits
+on [Lab 8](lab8/README.md), which is specified and not yet built. As above,
+neither tool is scheduled in Labs 1 and 2.
 
 **Why is "it copies corruption" such a big deal?**
 Because it is silent. A corrupt page is copied byte for byte into every backup,

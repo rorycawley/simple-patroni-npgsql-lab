@@ -92,7 +92,7 @@ easily forgotten because it is neither a Unix account nor a database role.
 | etcd | `etcd` | its TLS key, if issued rather than pre-placed |
 | `node_exporter` | own user | nothing |
 | `postgres_exporter` | own user | the `monitoring` role's password |
-| Alloy | own user | its Loki/Mimir credentials — see below |
+| Alloy | `alloy` | a clientAuth-only TLS key — see below. It pushes to Mimir and Loki with **no** credential |
 
 ### Three workloads share the `postgres` user
 
@@ -117,6 +117,11 @@ Alloy is the one with a real design decision behind it: it must read logs, and
 PostgreSQL's are `0600 postgres`. It therefore needs a group, a filesystem ACL,
 or journald — and **not** membership of `postgres`, which would hand the log
 collector the superuser password.
+
+**Lab 5 chose journald.** Alloy runs as its own `alloy` user and reads the
+journal rather than the files, so it never needs the `postgres` group, and the
+log lines the runbooks tell operators to grep for — `Watchdog device is not
+usable` among them — arrive without granting the collector anything.
 
 ### Bootstrapping
 
@@ -243,7 +248,9 @@ GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text)  TO pgbackres
 | MinIO access key and secret | Lab 3 | Repository access |
 | **pgBackRest `repo1-cipher-pass`** | Lab 3 | See below |
 | Dump encryption passphrase | Lab 3 | `pg_dump` output is written outside the pgBackRest repository, so `repo1-cipher-pass` does not cover it. Without its own passphrase the dumps sit in the bucket in plaintext |
-| Grafana admin, Alloy → Loki/Mimir credentials | Lab 5 | |
+| Telemetry object-store key (`lab5-telemetry-rw`) | Lab 5 | Held by **Mimir and Loki**, not by Alloy, and scoped to the two telemetry buckets so a monitoring compromise cannot reach the backup repository |
+| Alloy's client certificate | Lab 5 | A clientAuth-only identity, deliberately **not** Patroni's — that one also serves the REST API, and handing it to an agent would make a monitoring compromise a cluster compromise |
+| Grafana — **no credential at all** | Lab 5 | It runs `GF_AUTH_ANONYMOUS_ENABLED=true` with the Admin role: anyone who can reach the port is an admin. Acceptable for a lab on a private network, and a **gap to close before anything like it is exposed** |
 
 ## Three risks worth stating
 

@@ -1,7 +1,11 @@
 # Lab 5: monitoring with Grafana LGTM
 
-> **Status: specified, not built.** Everything below is the design and its
-> acceptance criteria. No results are claimed.
+> **Status: built and verified — all five criteria met.** The acceptance
+> criteria below are unchanged from before the work started, which is the point
+> of writing them first. `make check` runs 29 phases. Nine alerts have been
+> watched firing with their latency measured — five induced in the alerting
+> phase, which asserts each raises its own alert **and no other**, and four in
+> the phases before it.
 
 The shared components, cluster design and prerequisites are in the
 [top-level README](../README.md). This file covers Lab 5 only.
@@ -165,9 +169,13 @@ part is currently measured.
 Lab 5's output is therefore a detection-latency column in `SLA.md`, which is what
 makes it a measurement rather than a dashboard exercise.
 
-## Open decisions
+## Decisions taken
 
-| Question | Consideration |
+Both were open when this file was written. [`PLAN.md`](PLAN.md) carries the full
+reasoning and the costs accepted.
+
+| Question | Decided |
 | --- | --- |
-| **Tempo and traces** | Only earn their place if the .NET client is instrumented. Then a failover is visible from the client's side — "retried 16 times" correlated with "Patroni promoted pg3" on one timeline, which metrics cannot show. The cost is real .NET work |
-| **Alert delivery** | Proving an alert *fires* is easy; proving it *arrives* needs a destination. A local webhook receiver keeps AC-5 self-contained and assertable |
+| **Tempo and traces** | **Not built.** They only earn their place once the .NET client is instrumented, which is real work outside this lab's question. The cost is stated rather than paid: a failover stays invisible from the client's side. No Tempo means no third bucket — storage nobody writes to is not worth configuring |
+| **Alert delivery** | **Mailpit, over SMTP — not a webhook sink.** Email is the channel these alerts would really use, and it exercises what a webhook cannot: Alertmanager's `email_configs` and the templating inside every annotation. A JSON dump would accept `<no value>` as a subject line without comment; a rendered mail does not, and AC-5 asserts on the rendered mail |
+| **Which alertmanager** | **A standalone Alertmanager**, not Mimir's built-in one. Measured: Mimir's delivers exactly one notification after a restart and fails every later one with `invalid service state: Terminated`, while `/services` still reports it Running and every rule reads firing. Its per-tenant config upload, sharding ring and replicated state target multi-tenant SaaS and earn nothing here. The standalone one takes a mounted config file, so a missing route stops the container instead of dropping alerts |

@@ -71,7 +71,7 @@ None of them are assumptions.
 | P5 | AC-5 | The pipeline monitors itself, and alerts are proven to arrive |
 | P6 | AC-2 (in full) | All eleven faults raise their specific alert — and a healthy run raises none |
 
-### P0 — Fork Lab 4, stand up LGTM and Alloy
+### P0 — Fork Lab 4, stand up LGTM and Alloy — **done**
 
 **What.** `lab5/` becomes a working copy of Lab 4, renamed, plus Grafana, Mimir
 and Loki on the control machine and Alloy on each node.
