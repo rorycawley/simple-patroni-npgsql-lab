@@ -264,3 +264,31 @@ rules:
         The agent on this node is fine, so the node looks alive. Patroni itself is
         not running -- check the journal for 'system ID mismatch' or a data
         directory fault. RUNBOOKS.md procedure 5.
+
+  # Patching is the operation that CLEARS this, which is why the alert arrives
+  # with Lab 6 rather than Lab 5. A parameter change that needs a restart can
+  # sit unapplied indefinitely: Patroni keeps serving the old value, the
+  # configuration on disk says the new one, and nothing disagrees out loud.
+  #
+  # `for: 5m` is a deliberate trade-off against AC-8. A pending restart is
+  # NORMAL for the minutes between changing a parameter and the rolling restart
+  # that applies it, so a short window would page during correct maintenance --
+  # the exact noise AC-8 forbids. Five minutes tolerates that window while
+  # staying short enough for a positive control to watch it fire.
+  #
+  # It does not fire during a version patch: pending_restart tracks Patroni
+  # CONFIGURATION, not installed binaries, so P3's rolling upgrade leaves it at
+  # 0 throughout and AC-8 is not at risk from the patch cycle itself.
+  - alert: PendingRestart
+    expr: max by (node) (patroni_pending_restart) == 1
+    for: 5m
+    labels:
+      severity: warning
+      runbook: "8"
+    annotations:
+      summary: "{{ $labels.node }}: a configuration change is waiting for a restart"
+      description: >-
+        Patroni is running with a configuration different from the one on disk.
+        It takes effect at the next restart, which on this cluster means a
+        rolling restart through patronictl, one node at a time, primary last --
+        RUNBOOKS.md procedure 8.

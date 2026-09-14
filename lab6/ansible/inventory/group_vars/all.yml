@@ -52,8 +52,8 @@ lab6_repo_region: us-east-1
 
 # The monitoring stack, on the control machine beside the object store. Alloy
 # pushes to these; nothing here is scraped from outside.
-lab6_loki_port: 3100
-lab6_mimir_port: 9009
+lab6_loki_port: 3110
+lab6_mimir_port: 9019
 
 # The metrics role. pg_monitor is a built-in role granting read access to the
 # statistics views and nothing else -- it cannot read table data.

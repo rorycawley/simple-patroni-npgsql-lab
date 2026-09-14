@@ -351,10 +351,33 @@ AMCFG
   done
   if [[ -n "$ready" ]]; then
     if [[ -f "$LAB_DIR/observability/rules/lab6.yaml" ]]; then
-      curl -s --max-time 20 -X POST -H "Content-Type: application/yaml" \
+      # curl succeeds when the SERVER answers, including when it answers 400.
+      # This printed "Alert rules loaded" over a `400 unable to decode rule
+      # group` for an entire run, and the stack came up with ZERO rules while
+      # saying otherwise -- a monitoring stack that reports its own alerting as
+      # loaded when none of it is. The status code decides, and a failure is
+      # fatal: a stack with no rules is not a stack worth testing against.
+      local rules_code rules_body
+      rules_body="$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' \
+        -X POST -H "Content-Type: application/yaml" \
         --data-binary @"$LAB_DIR/observability/rules/lab6.yaml" \
-        "http://127.0.0.1:${MIMIR_PORT}/prometheus/config/v1/rules/lab6" >/dev/null 2>&1 \
-        && echo "Alert rules loaded"
+        "http://127.0.0.1:${MIMIR_PORT}/prometheus/config/v1/rules/lab6" 2>/dev/null)"
+      rules_code="${rules_body:-000}"
+      if [[ "$rules_code" == 2* ]]; then
+        # Loaded is not the same as present. Read them back.
+        local loaded
+        loaded="$(curl -s --max-time 15 \
+          "http://127.0.0.1:${MIMIR_PORT}/prometheus/config/v1/rules" 2>/dev/null \
+          | grep -c 'alert:')"
+        echo "Alert rules loaded: $loaded"
+        (( loaded > 0 )) || { echo "the ruler accepted the upload and stored nothing" >&2; return 1; }
+      else
+        echo "Alert rules REJECTED (HTTP $rules_code). The stack has no alerting." >&2
+        curl -s --max-time 20 -X POST -H "Content-Type: application/yaml" \
+          --data-binary @"$LAB_DIR/observability/rules/lab6.yaml" \
+          "http://127.0.0.1:${MIMIR_PORT}/prometheus/config/v1/rules/lab6" 2>&1 | head -3 >&2
+        return 1
+      fi
     fi
     echo "Monitoring stack up: Grafana $(url_), Mimir :${MIMIR_PORT}, Loki :${LOKI_PORT}"
     echo "Telemetry is stored in MinIO: $MIMIR_BUCKET and $LOKI_BUCKET"
