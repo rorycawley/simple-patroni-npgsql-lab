@@ -30,6 +30,24 @@
       ansible.builtin.set_fact:
         lab4_host_gateway_ip: "{{ lab4_host_gateway_ip_override or (lab4_node_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
 
+    # A freshly created VM answers SSH before its resolver does. Rung 6 failed
+    # here once, on all three nodes at once, with
+    #   Failed to download packages: Curl error (6): Couldn't resolve host name
+    # after the package task's own 5 retries had expired during early boot -- and
+    # the same name resolved fine from the same VM minutes later. The packages
+    # were never the problem, so retrying them harder is not the fix: the play was
+    # racing cloud-init's resolver. Gate on DNS answering instead, because a
+    # total-loss rebuild must not depend on how quickly the host settles. This is
+    # the one procedure an operator runs when everything else is already gone.
+    - name: Wait until the node can resolve names
+      ansible.builtin.command:
+        cmd: getent hosts mirrors.rockylinux.org
+      register: lab4_dns_ready
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: lab4_dns_ready is succeeded
+
   roles:
     # Before postgres_node: the package installs create /var/lib/pgsql and
     # /var/lib/etcd, and anything written there before the mount would be
