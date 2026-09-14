@@ -58,7 +58,7 @@ The first four decide whether the lab is possible at all.
 | P6 | AC-6 | Broken binaries, rolled back without rebuilding the node |
 | P7 | AC-8's positive half | A correct cycle, and a mailbox that stays empty |
 
-### P0 — Fork, pin, and add the missing alert
+### P0 — Fork, pin, and add the missing alert — **done**
 
 Fork into `lab6/`, renaming `lab5` → `lab6`. Comments that name a lab by its
 *purpose* must be re-read rather than renamed: a blind substitution has twice
@@ -75,13 +75,45 @@ resolve.
 **Done when:** three nodes run 18.4, 18.6 is confirmed available, and
 `PendingRestart` has been watched firing *and* clearing.
 
-### P1 — One standby, patched the right way
+> **Done.** Three nodes on 18.4-2. 18.6 proven by use, not by a listing: from
+> inside a guest `dnf` offers 18.4-1, 18.4-2 and 18.6-1, and a dry-run upgrade
+> resolves to a real transaction — 18.4-1 also gives AC-6 a same-minor rollback
+> target. `PendingRestart` fired 300s after a config change, exactly its window,
+> and cleared 15s after a rolling restart applied it.
+>
+> Three fork defects found by building it. Alloy was pushing to Lab 5's ports
+> because the rebase missed two Ansible variables, so Mimir held nothing. The new
+> rule was indented four spaces where the file uses two, so Mimir rejected the
+> whole group with `400 unable to decode rule group`. And the reason that 400 went
+> unnoticed: `observability.sh` printed "Alert rules loaded" off curl's exit
+> status, which is success whenever the server answers — including when it answers
+> 400. The stack came up announcing alerting it did not have. It now reads the
+> rules back and counts them.
+>
+> A full `make all` then passed 32 of 33 phases. The failure was Rung 1, waiting
+> on member state that still said `streaming` from before the reinit took effect:
+> a 1s "rebuild", and a journal read before pgBackRest had written its report.
+> Completion is now detected from the journal, as starting already was.
+
+### P1 — One standby, patched the right way — **done**
 
 `patronictl restart` one standby, wait for `streaming`, assert the leader key
 never moved, then assert AC-7's full end state.
 
 **Done when:** one standby runs 18.6 while the others run 18.4, the cluster is
 healthy, and a mixed-version cluster has been shown to replicate.
+
+> **Done.** pg2 patched 18.4 → 18.6 and streaming again **5s** after the restart
+> began, with the leader key unmoved and the timeline unchanged — AC-3's claim,
+> measured. AC-7's end state intact: one leader, two streaming standbys, quorum
+> commit still strict, watchdog present on all three, not paused.
+>
+> Two assertions here exist nowhere else in the lab. Between `dnf upgrade` and
+> the restart, pg2 had 18.6 **on disk** while still **running** 18.4 and still
+> streaming — the gap that makes the restart step necessary, and which is
+> invisible once it has happened. And with the leader on 18.4 and the standby on
+> 18.6, a row written on one arrived on the other: mixed-version replication
+> proven by moving data across the boundary rather than by citing release notes.
 
 ### P2 — The two wrong moves: performed, costed, and their alerting recorded
 
