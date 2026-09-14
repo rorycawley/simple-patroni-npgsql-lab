@@ -312,6 +312,9 @@ migrations as **not established**. Lab 4 replaces it with a measured range,
 because there is no single number: what it costs depends entirely on which rung
 the damage calls for, which is the whole point of the ladder.
 
-Until then the honest position stands: the labs can state how fast the cluster
-recovers from a node it lost, and cannot yet state how fast it recovers from
-losing everything.
+That gap is now closed at both ends. The labs can state how fast the cluster
+recovers from a node it lost, **and** how fast it recovers from losing
+everything: rung 6 destroys all three nodes, their encrypted volumes and every
+local secret, then rebuilds from the repository alone in **450s to a redundant
+three-node cluster, 0 rows lost** — with a new CA, because nothing secret
+survives except the repository's own keys.

@@ -898,13 +898,16 @@ alone. Measured: **2s restore, 0s replay, 450s from destruction to a redundant
 three-node cluster, 0 rows lost.** Those seconds are not representative; the
 database is small. The *shape* is.
 
-> **What tells you:** everything at once — `NodeNotReporting` and
-> `AlloyNotReporting` per node (about 150s and 250s), `NoLeaderAnywhere` (190s),
-> `PostgresNotRunning`, and then `NothingArchivedRecently` as the archive stops
-> advancing. That breadth **is** the signal: a single node failing produces one
-> or two of these, and all of them together is the shape of total loss. Note the
-> monitoring stack runs on the control machine, so it survives the cluster and
-> can still tell you — which is the whole reason it lives there.
+> **What tells you:** everything at once — `NoLeaderAnywhere` (190s),
+> `PatroniNotScrapable` (150s), `PostgresNotRunning`, then `AlloyNotReporting`
+> (253s) as the agents stop shipping, and `NothingArchivedRecently` as the
+> archive stops advancing. `NodeNotReporting` — fewer than three nodes reporting
+> — comes **last**, and by some margin: a stopped agent's last value persists
+> through the query lookback, so the cluster keeps answering with stale data
+> before the count falls. That breadth **is** the signal: a single node failing
+> produces one or two of these; all of them together is the shape of total loss.
+> The monitoring stack runs on the control machine, so it survives the cluster
+> and can still tell you — which is the whole reason it lives there.
 
 ## What has to survive
 

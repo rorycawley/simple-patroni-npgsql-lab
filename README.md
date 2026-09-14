@@ -168,7 +168,7 @@ needs that they do not have — the list this proof of concept exists to produce
 | **PKI** | A private CA issuing certificates at build time | Issuance, rotation, revocation, and expiry monitoring. Expiry is the one outage that is entirely preventable by watching a number |
 | **Disk encryption keys** | A root-only keyfile on the node itself | KMS, TPM or network-bound unlock. Today a stolen *disk* is safe and a stolen *node* is not |
 | **Client failover** | Npgsql's `Target Session Attributes=primary` | The same capability in every language in the estate, or a proxy tier. Putting failover in the client obliges every client to honour it |
-| **Monitoring** | Built in [Lab 5](lab5/README.md): Grafana, Mimir and Loki off-host, sixteen alert rules, delivery proven to a mailbox | Alerting that reaches a human on a rota, rather than a local mailbox, and a stack that is itself redundant |
+| **Monitoring** | Built in [Lab 5](lab5/README.md): Grafana, Mimir, Loki and a standalone Alertmanager off-host, sixteen alert rules, delivery proven by reading the mail | Alerting that reaches a human on a rota, rather than a local mailbox, and a stack that is itself redundant |
 | **Patching and upgrades** | Designed but unbuilt — [Lab 6](lab6/README.md) | A rehearsed rolling procedure for PostgreSQL minor versions, Patroni, etcd and the OS. The operation the team performs most often, and the one this cluster's own constraints make easiest to get wrong |
 | **Break-glass** | Not implemented | A named, audited `operator` identity, with an offline copy that works when the identity provider does not |
 

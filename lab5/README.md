@@ -161,13 +161,18 @@ which is the specific failure this lab exists to rule out.
 
 ## What this contributes back
 
-[`SLA.md`](../SLA.md) measures recovery time and says nothing about detection
-time. For self-healing faults that is fine. For the two failures above it is
+[`SLA.md`](../SLA.md) measured recovery time and said nothing about detection
+time. For self-healing faults that is fine. For the two failures above it was
 half the answer: their real RTO is *detect + decide + act*, and only the last
-part is currently measured.
+part was measured.
 
-Lab 5's output is therefore a detection-latency column in `SLA.md`, which is what
-makes it a measurement rather than a dashboard exercise.
+It now carries a **detection** section with nine measured latencies, 130s to
+260s, and the instruction to add them to the RTO of any row that does not
+self-repair — which is what makes this a measurement rather than a dashboard
+exercise. [`RUNBOOKS.md`](../RUNBOOKS.md) gained a *What tells you* line on
+every procedure that has an alert behind it, naming the alert, its latency and
+what trips it; runbook 7 says plainly that nothing tells you, because no rule
+here watches a certificate's expiry date.
 
 ## Decisions taken
 
