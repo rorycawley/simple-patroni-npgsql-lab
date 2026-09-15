@@ -261,7 +261,7 @@ watchdog armed afterwards rather than assumed.
 > never be recorded as a closed gap, because that is the one thing that would
 > hollow this phase out.
 
-### P5 — etcd and Patroni, one member at a time
+### P5 — etcd and Patroni, one member at a time — **done**
 
 Upgrade etcd and Patroni on each node in turn, sampling `etcdctl endpoint health`
 throughout and watching Patroni's view of the DCS. Never in the same window as a
@@ -269,6 +269,31 @@ PostgreSQL patch.
 
 **Done when:** every member is upgraded, quorum was never lost, and neither
 `EtcdQuorumLost` nor `PatroniLostDcs` fired.
+
+> **Done.** etcd **3.5.30 → 3.5.33** and Patroni **4.1.4 → 4.1.5** across three
+> members in **108s** (31s, 42s, 35s), quorum never below **2 of 3**, and neither
+> `EtcdQuorumLost` nor `PatroniLostDcs` fired. PostgreSQL stayed on 18.6
+> throughout — the two are never patched in one window, and the phase asserts it
+> rather than just avoiding it.
+>
+> **The gap had to be manufactured.** Only PostgreSQL was pinned at build time,
+> so etcd and Patroni installed whatever was newest and there was nothing to
+> upgrade *to* — the same hazard AC-4 names. The phase steps both packages back
+> one release first, one member at a time so even the setup keeps quorum, and
+> then measures the upgrade back.
+>
+> **The sampler's own control is what makes the result mean anything.** The first
+> run reported "fewest healthy members seen: 3", which reads as a perfect score
+> and is in fact weaker evidence: a probe that always answered 3 would satisfy
+> the check just as well. The phase now stops etcd on one member first and
+> requires the sampler to report 2 before trusting it. With that in place the
+> measured run caught a real dip — **fewest seen: 2** — so a member genuinely
+> left and quorum genuinely held, which is the claim.
+>
+> Stated rather than glossed: samples are about a second apart, because each
+> costs an `etcdctl` startup, so a shorter dip could fall between two of them.
+> What is proven is that no sample caught a loss of quorum, by an instrument
+> shown capable of catching one — not that no member was ever briefly absent.
 
 ### P6 — The upgrade that will not start
 
