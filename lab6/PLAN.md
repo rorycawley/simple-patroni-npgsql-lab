@@ -115,7 +115,7 @@ healthy, and a mixed-version cluster has been shown to replicate.
 > 18.6, a row written on one arrived on the other: mixed-version replication
 > proven by moving data across the boundary rather than by citing release notes.
 
-### P2 — The two wrong moves: performed, costed, and their alerting recorded
+### P2 — The two wrong moves: performed, costed, and their alerting recorded — **done**
 
 The mailbox is emptied first, and the expected alerting outcome is written down
 **before** each control runs — otherwise "the right alert fired" is a judgement
@@ -136,6 +136,36 @@ Each is restored and asserted healthy before the next begins.
 
 **Done when:** both costs are numbers, each control's alerting matches what was
 named in advance, and the cluster is healthy again.
+
+> **Done.** Both costs are numbers, and both controls' alerting matched what was
+> written down before they ran.
+>
+> | Wrong move | Cost | Alerting |
+> | --- | --- | --- |
+> | Both standbys at once | **writes refused for 132s** | `WritesBlockedOnSyncReplication` fired at **131s** — and `NoLeaderAnywhere`, `ClusterPaused`, `EtcdQuorumLost` all stayed quiet |
+> | `pg_ctl restart` on the primary | **5s and a promotion**, timeline 15 → 16, against ~2s for a switchover | **nothing fired** |
+>
+> The blocked write committed once a standby returned: writes were *refused*, not
+> lost, which is the distinction strict mode exists to make. 131s also matches
+> `SLA.md`'s 130s for that alert, measured independently in Lab 5.
+>
+> **The second control is the finding.** An unnecessary election is real,
+> client-visible, and completely invisible to monitoring — it resolves faster
+> than every threshold in the ruleset. The maintenance runbook cannot tell an
+> operator "you would have been paged" about restarting the primary directly.
+> Naming that outcome in advance is what made it a result rather than a surprise.
+>
+> Two test defects were fixed here, both mine. The alert latency was reported
+> from the wrong baseline, printing "fired at 140s" beside "blocked for 133s" —
+> an alert appearing to arrive after the fault had ended. And the no-alert check
+> compared alert COUNTS, which cannot distinguish "a new alert fired" from "an
+> old one resolved": it failed when the count fell 3 → 0, which was the system
+> behaving correctly. It now settles to silence first, then compares alert
+> *names*.
+>
+> Asserting on the TIMELINE rather than the leader's name earned itself here. The
+> first run re-elected the same node — `leader pg1 -> pg1`, timeline 14 → 15 — so
+> a name comparison would have reported no election at all.
 
 Only the first cost has a runbook signature to match. The second is measured
 against [`SLA.md`](../SLA.md#per-failure-mode): a switchover moves the leader in
