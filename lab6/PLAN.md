@@ -295,7 +295,7 @@ PostgreSQL patch.
 > What is proven is that no sample caught a loss of quorum, by an instrument
 > shown capable of catching one — not that no member was ever briefly absent.
 
-### P6 — The upgrade that will not start
+### P6 — The upgrade that will not start — **done**
 
 Break the new binaries on one standby so PostgreSQL fails to start, then follow
 the documented rollback and return it to `streaming`. The assertion that matters
@@ -304,6 +304,35 @@ against Lab 4's measured `reinit` cost to state what the rollback saved.
 
 **Done when:** a node has been recovered from a failed upgrade without a resync,
 and the saving is a number.
+
+> **Done.** pg1's binaries were replaced with a stub that will not exec, Patroni
+> reported it `start failed` — the actual incident state — and `dnf downgrade`
+> returned it to `streaming` in **15s**, with no rebuild.
+>
+> The claim is a negative, so it is proven three independent ways: the journal
+> never announces a replica being created (the same line rung 1 asserts to prove
+> one DID happen), the system identifier is unchanged, and a sentinel planted in
+> the data directory survived. A rebuild would break all three.
+>
+> It also settles something the rollback quietly depends on: **18.4 binaries
+> opened a data directory last written by 18.6.** Minor versions share an on-disk
+> format, which is exactly why a downgrade is available as a rollback at all —
+> measured here rather than taken from the release notes.
+>
+> **The saving is not in seconds, and saying so honestly matters.** The rollback
+> took 15s moving packages; rung 1 rebuilds from the repository in 4s moving the
+> whole 256 MB data directory. On a lab database the rebuild is *faster*. The
+> rollback's cost is fixed at the size of the packages while a rebuild's grows
+> with the database, and that ratio — not these seconds — is what matters at
+> 23:00 on a real one.
+>
+> **The break's own positive control earned the whole phase.** The first run used
+> `dd` to corrupt the binary, which failed with `Text file busy` — Linux refuses
+> to write a file it is executing — and the error went to `/dev/null`. The node
+> was never broken, and all three "proofs" of no-rebuild passed VACUOUSLY: no
+> rebuild had happened because nothing had happened. Only the control asserting
+> the binary no longer runs caught it. The binary is now renamed and replaced
+> with a stub, which works because the running postmaster keeps the old inode.
 
 ### P7 — A correct cycle, and a mailbox that stays empty
 
