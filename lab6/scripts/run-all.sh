@@ -157,11 +157,21 @@ main() {
   # induces a failover and restarts the whole monitoring stack -- early in the
   # suite that disturbed every phase after it, which assume a settled cluster.
   run_phase "Monitoring: every node ships, telemetry lands in MinIO, the cluster does not depend on it" test_observability optional
-  # Runs here, after the monitoring phase and among the fault injections, because
-  # it induces five faults of its own and waits for every rule to go quiet between
-  # them. A phase that is never invoked is a phase that rots: it passes once and
-  # then quietly stops matching the system it claims to check.
-  run_phase "Alerting: every fault raises its own alert and no other" test_alert_coverage optional
+  # Lab 5's full alert-coverage induction is NOT in the default path: it takes 25
+  # minutes to re-prove eleven inherited alerts, and Lab 6's subject is patching.
+  # It remains available as `make test_alert_coverage`.
+  #
+  # The patching phases go last, after the cluster has been shown healthy by
+  # everything above. They are the most destructive in the series -- P2 blocks
+  # writes on purpose and forces an election -- so running them against an
+  # already-suspect cluster would produce failures belonging to neither.
+  run_phase "Patch one standby through Patroni, leader key unmoved" test_patch_standby optional
+  run_phase "The two wrong moves, performed and costed" test_patch_unsafe optional
+  run_phase "A complete rolling upgrade, invisible to the client" test_patch_cycle optional
+  run_phase "A kernel change survived unattended, watchdog proven by promotion" test_patch_kernel optional
+  run_phase "etcd and Patroni upgraded a member at a time, quorum held" test_patch_dcs optional
+  run_phase "A failed upgrade rolled back without rebuilding the node" test_patch_rollback optional
+  run_phase "A correct patch cycle wakes nobody" test_patch_quiet optional
   run_phase "Criterion 2: failover after the primary VM is lost" test_failover_vm optional
   run_phase "Criterion 2: failover after PostgreSQL is killed" test_failover_postgres optional
   run_phase "Split brain: softdog fences a frozen Patroni" test_fencing_patroni optional

@@ -334,7 +334,7 @@ and the saving is a number.
 > the binary no longer runs caught it. The binary is now renamed and replaced
 > with a stub, which works because the running postmaster keeps the old inode.
 
-### P7 — A correct cycle, and a mailbox that stays empty
+### P7 — A correct cycle, and a mailbox that stays empty — **done**
 
 Empty the mailbox, run the complete correct cycle, and assert it is **still
 empty** at the end. AC-8's other half — what each wrong move raises — was
@@ -350,6 +350,26 @@ not a failed patch procedure.
 
 **Done when:** correct maintenance is proven silent, or its noise is
 characterised.
+
+> **Done, and it is silent.** A complete cycle — 18.4 → 18.6 across three nodes
+> in 64s, 252 client transactions, zero failed — left the mailbox **empty** and
+> no rule firing. Correct maintenance wakes nobody.
+>
+> The mailbox is the instrument rather than the ruler's final state, and that
+> choice is load-bearing: an alert that fires and resolves inside the window
+> would be invisible to a final-state check and would still have woken someone,
+> because Alertmanager sends on the transition. The check also proves the mailbox
+> is *reachable* before trusting it to be empty — zero messages from a mailbox
+> nobody can reach looks exactly like silence.
+>
+> The levelling back to 18.4 is deliberately done **before** the mailbox is
+> emptied. It is a rolling downgrade, not a patch cycle, and AC-8's claim is
+> about the cycle.
+>
+> With P2's negative half, AC-8 is now answered in both directions: a correct
+> cycle raises nothing, blocked writes raise their own alert and nothing
+> misdirecting, and an unnecessary election raises nothing at all — which is the
+> finding the maintenance runbook has to carry.
 
 ## Risks
 
