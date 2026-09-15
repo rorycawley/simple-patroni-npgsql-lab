@@ -1,4 +1,4 @@
-.PHONY: help all check clean minio_start minio_stop minio_status minio_destroy test_minio test_history test_replica test_patch_standby test_patch_unsafe test_beside test_table test_rewind test_repository test_backup test_chain test_dump test_encryption test_archive test_runbook test_at_rest test_pki test_in_transit test_identity test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms rebuild_prepare rebuild_finish test_total_loss test_total_loss_dry test_fails_closed ladder_cost observability_start observability_stop observability_status observability_destroy test_observability test_alert_coverage
+.PHONY: help all check clean minio_start minio_stop minio_status minio_destroy test_minio test_history test_replica test_patch_standby test_patch_unsafe test_patch_cycle test_beside test_table test_rewind test_repository test_backup test_chain test_dump test_encryption test_archive test_runbook test_at_rest test_pki test_in_transit test_identity test_sync create_vms configure_hostnames configure_cluster verify_cluster test_connection test_client test_failover test_failover_vm test_failover_postgres test_fencing test_fencing_patroni test_fencing_etcd test_faults destroy_vms rebuild_prepare rebuild_finish test_total_loss test_total_loss_dry test_fails_closed ladder_cost observability_start observability_stop observability_status observability_destroy test_observability test_alert_coverage
 
 # `make` on its own prints this help rather than building a cluster, because
 # `all` creates VMs and runs destructive fault injection.
@@ -229,6 +229,10 @@ test_patch_standby:
 # P2: AC-2 and AC-8's negative half. Both wrong moves, performed and costed.
 test_patch_unsafe:
 	./scripts/test-patch-unsafe.sh
+
+# P3: AC-1. The full four-step cycle, with the client committing throughout.
+test_patch_cycle:
+	./scripts/test-patch-cycle.sh
 
 test_beside:
 	./scripts/test-beside.sh

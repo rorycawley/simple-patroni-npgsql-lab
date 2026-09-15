@@ -172,7 +172,7 @@ against [`SLA.md`](../SLA.md#per-failure-mode): a switchover moves the leader in
 ~2s and PostgreSQL dying under Patroni costs ~10–25s, so the number to produce is
 what restarting the primary directly costs against the ~2s it could have cost.
 
-### P3 — The full cycle, invisible to the client
+### P3 — The full cycle, invisible to the client — **done**
 
 The four-step order end to end, client committing throughout.
 
@@ -183,6 +183,32 @@ mid-backup. If it is ugly, it belongs in the maintenance runbook.
 
 **Done when:** every node runs 18.6, the client records **zero** failed
 transactions, and the wall-clock cost of a complete cycle is emitted.
+
+> **Done.** A complete cycle, 18.4 → 18.6 across three nodes, in **67s**:
+> standbys at 15s and 23s, switchover **4s**, old primary 22s. The real Npgsql
+> client committed throughout and recorded **287 transactions, zero failed** —
+> AC-1 measured in transactions rather than in uptime, and including the
+> switchover, which is the only step that moves the primary.
+>
+> The phase levels the cluster first, downgrading any node that is ahead, so the
+> emitted cost is a COMPLETE cycle rather than whatever was left over from an
+> earlier phase. That also makes it repeatable, and it gave AC-6 an early data
+> point for free: a cross-minor `dnf downgrade` back to 18.4 worked on all three
+> nodes, which is the rollback P6 depends on.
+>
+> **Backups during the window, reported not gated.** Across two runs the
+> collision happened once: a scheduled backup ran *during* the patch cycle and
+> completed, the repository still verified afterwards, and no `lab6-` unit was
+> left failed. That is one observation, not a guarantee, and the runbook should
+> say so.
+>
+> One real defect, and it was a step that could not fail. `patch_member` ran dnf
+> with its output discarded and returned success if the node was streaming again
+> — so when a mirror served an HTML error page instead of `repomd.xml`, step 4
+> reported "patched to 18.4" and the phase only failed later, on a separate
+> version check. It now retries with `--refresh`, surfaces dnf's error, and
+> asserts the RUNNING version is the one requested. Streaming again proves the
+> node came back, not that anything changed.
 
 ### P4 — A kernel update, and a reboot nobody attends
 
