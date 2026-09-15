@@ -210,7 +210,7 @@ transactions, and the wall-clock cost of a complete cycle is emitted.
 > asserts the RUNNING version is the one requested. Streaming again proves the
 > node came back, not that anything changed.
 
-### P4 — A kernel update, and a reboot nobody attends
+### P4 — A kernel update, and a reboot nobody attends — **done**
 
 Update the kernel on one standby, reboot, and assert by `boot_id` that the kernel
 actually restarted — then that the volumes unlocked, the mounts landed before
@@ -223,6 +223,43 @@ failover.
 
 **Done when:** a node has survived a real kernel change unattended, with the
 watchdog armed afterwards rather than assumed.
+
+> **Done.** pg2 went from **687.10.1 to 687.46.1** — 36 releases apart, not a
+> rebuild of the same kernel — and the boot id moved, so the kernel genuinely
+> restarted. Unattended, it brought back both LUKS volumes, the data directory
+> intact on its own device, and `softdog` loaded against the new kernel. It was
+> streaming again **36s** after the reboot began with no operator action, and
+> then **took the leader key in 3s**.
+>
+> That promotion is the assertion. `test -c /dev/watchdog` proves a device file
+> exists; being promoted proves Patroni could ARM it, which is what
+> `watchdog: mode: required` actually gates. A node that cannot arm its watchdog
+> refuses to be primary silently, and nothing else here would have noticed.
+>
+> The answer is the reassuring one — `modules-load.d` survives a kernel change —
+> but the lab now knows it rather than assuming it, which was the point.
+>
+> Three defects, all in the test, and two of them would have reported alarming
+> nonsense:
+>
+> - The PG_VERSION check ran unprivileged against a `0700 postgres` directory, so
+>   it reported "absent" for a directory it merely could not read — which looks
+>   exactly like PostgreSQL having initialised over an unmounted path, the fault
+>   being checked for.
+> - The switchover was issued the instant the node returned to streaming, before
+>   it had caught up, and `patronictl`'s refusal went to `/dev/null`. The phase
+>   concluded "the watchdog did not survive the kernel change". It now waits for
+>   the candidate to catch up, retries, and prints what patronictl said.
+> - The closing summary said "and took the leader key afterwards" unconditionally,
+>   including on the run where it had not.
+>
+> The precondition probe was also rewritten. Parsing dnf's transaction table kept
+> reporting "no newer kernel" against a repository that plainly had one: the table
+> is rendered for people and arrives on both streams through `limactl shell`.
+> `repoquery` answers the same question in a format meant for scripts. It also
+> distinguishes "nothing newer exists" from "could not ask" — the second must
+> never be recorded as a closed gap, because that is the one thing that would
+> hollow this phase out.
 
 ### P5 — etcd and Patroni, one member at a time
 
