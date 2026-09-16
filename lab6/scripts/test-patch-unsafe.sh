@@ -214,13 +214,25 @@ for attempt in $(seq 1 $attempts); do
     | jq -r '[.data.alerts[]? | select(.state == "firing") | .labels.alertname] | sort | join(",")')"
 
   elect_start=$SECONDS
-  on "$VM_PREFIX$leader2" sudo -u postgres "$PGBIN/pg_ctl" -D "$PGDATA" -m fast restart >/dev/null 2>&1
+  # BOUNDED. `pg_ctl restart` waits for the postmaster to come back, and Patroni
+  # is managing that same postmaster concurrently -- the two raced and wedged for
+  # 27 minutes on one run, with no output and no timeout. `timeout` runs inside
+  # the guest, which is Linux and has it; the macOS host does not.
+  #
+  # A timed-out restart is not a failed measurement: postgres was still stopped,
+  # which is the wrong move being simulated, and Patroni brings it back. What
+  # follows measures what actually happened either way.
+  on "$VM_PREFIX$leader2" sudo -u postgres timeout 60 "$PGBIN/pg_ctl" -D "$PGDATA" -m fast restart >/dev/null 2>&1
 
   writable=""
   for _ in {1..90}; do
     now="$(patroni_json)" || { sleep 2; continue; }
     nl="$(leader_of "$now")"
-    if [[ -n "$nl" ]] && sql "$VM_PREFIX$nl" "INSERT INTO public.p2_probe DEFAULT VALUES" >/dev/null 2>&1; then
+    # statement_timeout, because this INSERT is exactly the write that BLOCKS
+    # when synchronous replication cannot be satisfied. Without it the probe for
+    # "is the cluster writable yet" hangs on the answer being "no".
+    if [[ -n "$nl" ]] && sql "$VM_PREFIX$nl" \
+        "SET statement_timeout='5s'; INSERT INTO public.p2_probe DEFAULT VALUES" >/dev/null 2>&1; then
       writable=yes; break
     fi
     sleep 2
