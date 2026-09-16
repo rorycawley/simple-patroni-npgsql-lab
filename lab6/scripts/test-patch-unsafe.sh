@@ -222,7 +222,18 @@ for attempt in $(seq 1 $attempts); do
   # A timed-out restart is not a failed measurement: postgres was still stopped,
   # which is the wrong move being simulated, and Patroni brings it back. What
   # follows measures what actually happened either way.
-  on "$VM_PREFIX$leader2" sudo -u postgres timeout 60 "$PGBIN/pg_ctl" -D "$PGDATA" -m fast restart >/dev/null 2>&1
+  # STOP, not restart, and Patroni does the starting.
+  #
+  # `pg_ctl restart` waits for the postmaster to come back while Patroni is
+  # racing to start it, and the two deadlock. Bounding the guest side with
+  # `timeout` was not enough: `limactl shell` does not return when its remote
+  # command is killed, so the HOST side hung for 88 minutes with the guest
+  # process already gone. `stop` returns as soon as the postmaster is down.
+  #
+  # It is also the more faithful simulation. The operator's mistake is taking
+  # PostgreSQL away from Patroni; what happens next is Patroni's decision, which
+  # is exactly the thing being measured.
+  on "$VM_PREFIX$leader2" sudo -u postgres timeout 45 "$PGBIN/pg_ctl" -D "$PGDATA" -m fast stop >/dev/null 2>&1
 
   writable=""
   for _ in {1..90}; do

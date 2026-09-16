@@ -371,6 +371,28 @@ characterised.
 > misdirecting, and an unnecessary election raises nothing at all — which is the
 > finding the maintenance runbook has to carry.
 
+## Suite status, stated plainly
+
+All eight phases pass **individually**, and their measurements are recorded above.
+
+A full `make check` has **not** yet completed clean. The first attempt was 32
+passed / 3 failed, and every failure was a phase that could not run twice — those
+are fixed and re-run green. The second attempt aborted in P2 on an infrastructure
+hang, not a cluster fault:
+
+> `limactl shell` does not return when its remote command is killed. `pg_ctl
+> restart` waits for the postmaster while Patroni races to start it, the two
+> deadlock, and bounding the guest side with `timeout` is not enough — the host
+> side hung for 88 minutes with the guest process already gone.
+
+P2 now issues `pg_ctl stop` and lets Patroni do the starting: verified to return
+in **0s** where the old form hung, and it is the more faithful simulation anyway,
+since the operator's mistake is taking PostgreSQL away from Patroni and what
+happens next is Patroni's decision — which is the thing being measured.
+
+**What remains unproven is the suite, not the lab.** One clean end-to-end
+`make check` would close it, and that is the first thing to run next.
+
 ## Risks
 
 | Risk | Mitigation |
