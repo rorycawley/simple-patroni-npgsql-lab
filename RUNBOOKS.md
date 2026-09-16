@@ -71,6 +71,7 @@ runbook is an assertion until something runs it.
 | Disk filling on a database node, or `pg_wal` growing | [6. Disk filling, or WAL accumulating](#6-disk-filling-or-wal-accumulating) |
 | Replication, `patronictl` and the application all failed at once | [7. Certificates have expired](#7-certificates-have-expired) |
 | You need to move the primary deliberately, for maintenance | [8. Planned switchover](#8-planned-switchover) |
+| You need to apply PostgreSQL, etcd or OS patches | [8a. Patch the cluster: a rolling minor upgrade](#8a-patch-the-cluster-a-rolling-minor-upgrade) |
 | A change was committed and was wrong | [9. Undo a change that was committed and later found to be wrong](#9-undo-a-change-that-was-committed-and-later-found-to-be-wrong) |
 | Every node is gone | [10. Total loss — every node gone](#10-total-loss--every-node-gone) |
 
@@ -713,6 +714,124 @@ This procedure is one step of a patch cycle rather than the whole of it. The ful
 rolling sequence — standbys first, switchover, then the old primary, and what
 each wrong order costs — is designed in [Lab 6](lab6/README.md) and is not yet
 rehearsed, which is why there is no runbook for it here.
+
+---
+
+# 8a. Patch the cluster: a rolling minor upgrade
+
+**Status: VERIFIED** — [Lab 6](lab6/README.md) performs this exact sequence with
+a client committing throughout, and measures the cost of each way of getting it
+wrong. Measured: **67s** for all three nodes, **zero failed transactions**.
+
+> **What tells you: nothing, and that is the point.** A correct cycle raises no
+> alert at all — verified by emptying a real mailbox, running the cycle, and
+> finding it still empty. So silence here means the procedure is working, not
+> that nobody is looking. The corollary is in "Do not", below: the one mistake
+> that matters is also invisible to monitoring.
+
+## Before you start
+
+- One leader and two `streaming` standbys. A patch run that begins degraded
+  cannot reach step 3.
+- Check `pending_restart` — a configuration change can be sitting unapplied, and
+  this is the operation that clears it.
+- Do **not** patch etcd in the same window. They share a node, not a lifecycle,
+  and an unhealthy DCS at the moment you move a leader is the one combination to
+  avoid. Patch etcd separately, one member at a time (see below).
+
+## The order
+
+```text
+1. standby A     patch, restart through Patroni, wait for `streaming`
+2. standby B     the same -- only after A is streaming again
+3. switchover    move the leader to an already-patched standby
+4. old primary   now a standby: patch it the same way
+```
+
+On each node, in turn:
+
+```sh
+# Install. This does NOT change the running server -- new binaries sit on disk
+# while the old ones keep serving, which is why a restart is required.
+sudo dnf -y upgrade percona-postgresql18-server percona-postgresql18 \
+  percona-postgresql18-contrib percona-postgresql18-libs
+
+# Apply, THROUGH Patroni. Never systemctl, never pg_ctl -- see "Do not".
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml restart <cluster> <node> --force
+
+# Confirm before touching the next node.
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml list
+sudo -u postgres psql -tAc 'SHOW server_version'
+```
+
+Then step 3, once both standbys are patched and streaming:
+
+```sh
+sudo -u postgres patronictl -c /etc/patroni/patroni.yml \
+  switchover <cluster> --leader <old-primary> --candidate <patched-standby> --force
+```
+
+A mixed-version cluster is expected and safe between adjacent minors — verified
+by writing a row on one version and reading it back on the other.
+
+## Do not
+
+| Do not | Measured cost |
+| --- | --- |
+| Patch **both standbys at once** | Writes are **refused for as long as both are down** — 132s in the lab. `synchronous_mode_strict` means they are refused, not lost, but the application stalls. This is [runbook 1](#1-writes-are-blocked-on-synchronous-replication) |
+| Restart the primary with `systemctl` or `pg_ctl` | **Risks an election** — it cost one in two attempts out of three, 5–13s and a promotion, against 2–4s for a switchover. Whether Patroni notices depends on where the restart lands in its 10s `loop_wait` |
+| Reboot without checking `softdog` | A node that cannot arm its watchdog **silently refuses to be primary**. It streams normally and is simply never eligible, which you discover at the next failover |
+| Patch etcd and PostgreSQL together | An unhealthy DCS exactly when Patroni is asked to move a leader |
+
+**The second row is the one to read twice.** Restarting the primary directly is a
+gamble, not a certainty — and **no alert fires for it**, because the cluster
+repairs itself faster than every threshold. Monitoring will not tell you it
+happened. A mistake that usually appears harmless is one people keep making, so
+this rule is enforced by following the order, not by being watched.
+
+## If the new binaries will not start
+
+Do **not** rebuild the node. Roll the package back:
+
+```sh
+sudo dnf -y downgrade percona-postgresql18-server-<old> percona-postgresql18-<old> \
+  percona-postgresql18-contrib-<old> percona-postgresql18-libs-<old>
+sudo systemctl restart percona-patroni
+```
+
+Measured at **15s** back to `streaming`, with the data directory untouched —
+verified three ways: the journal never announced a replica being created, the
+system identifier was unchanged, and a sentinel file in the data directory
+survived. Rebuilding instead would move the entire data directory; the rollback
+moves only packages.
+
+Older minors read a data directory written by a newer one, because minor versions
+share an on-disk format. That is what makes a downgrade available as a rollback.
+
+## Patching etcd and Patroni
+
+Separate window, one member at a time, checking health between each:
+
+```sh
+sudo dnf -y upgrade etcd percona-patroni
+sudo systemctl restart etcd && sleep 5 && sudo systemctl restart percona-patroni
+
+sudo etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/lab6/pki/ca.crt --cert=/etc/lab6/pki/etcd.crt --key=/etc/lab6/pki/etcd.key \
+  endpoint health --cluster
+```
+
+Verified across three members with quorum never below two of three, and neither
+`EtcdQuorumLost` nor `PatroniLostDcs` firing.
+
+## After a kernel update
+
+The reboot is the interesting part, and it is unattended: the LUKS volumes unlock,
+the mounts land before PostgreSQL starts, and `softdog` reloads against the new
+kernel. Verified by `boot_id` moving — which only happens when the kernel really
+restarts — and then by **promoting the rebooted node**, because a node that cannot
+arm its watchdog cannot become primary. Checking for `/dev/watchdog` proves a file
+exists; a successful promotion proves the watchdog works.
 
 ---
 

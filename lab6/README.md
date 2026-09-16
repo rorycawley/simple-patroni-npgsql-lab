@@ -1,7 +1,22 @@
 # Lab 6: patching and minor-version upgrades
 
-> **Status: specified, not built.** Everything below is the design and its
-> acceptance criteria. No results are claimed.
+> **Status: built and verified — all eight criteria met.** The criteria below are
+> unchanged from before the work started, which is the point of writing them
+> first. AC-8 was added before any building began, once Lab 5 made it measurable,
+> and is marked as such in the table.
+>
+> Measured: a complete rolling upgrade across three nodes in **67s** with **287
+> client transactions and zero failures**; a kernel change survived unattended
+> and the rebooted node **took the leader key**; etcd and Patroni upgraded a
+> member at a time with **quorum never below 2 of 3**; a failed upgrade rolled
+> back in **15s without rebuilding the node**; and a correct cycle left the
+> mailbox **empty**.
+>
+> One criterion did not hold as written, and is recorded rather than reworded.
+> AC-2 expects that restarting the primary directly *costs an election*. It costs
+> one only **sometimes** — it depends where the restart lands in Patroni's 10s
+> `loop_wait`. Measured across runs: an election twice, and none a third time.
+> The lab now counts the frequency instead of asserting the outcome.
 
 The shared components, cluster design and prerequisites are in the
 [top-level README](../README.md). This file covers Lab 6 only.
@@ -25,7 +40,7 @@ operator would otherwise do:
 | Guarantee | What it forbids | If ignored |
 | --- | --- | --- |
 | `synchronous_node_count: 1`, strict mode | Taking **both** standbys out at once | The second one blocks writes — [runbook 1](../RUNBOOKS.md#1-writes-are-blocked-on-synchronous-replication) |
-| `primary_start_timeout: 0` | Restarting PostgreSQL behind Patroni's back | Patroni reads a crash and hands the leader key away: a 2-second restart becomes an election |
+| `primary_start_timeout: 0` | Restarting PostgreSQL behind Patroni's back | Patroni reads a crash and hands the leader key away with no grace period. **Measured: it costs an election only sometimes**, depending where the restart lands in the 10s `loop_wait` — which makes it a gamble rather than a certainty |
 | `watchdog: mode: required` | Rebooting without confirming `softdog` came back | A node that cannot arm its watchdog **refuses to be primary at all** — [runbook 2](../RUNBOOKS.md#2-failover-did-not-happen) |
 | etcd and PostgreSQL share a node, not a lifecycle | Patching both in the same window | An unhealthy DCS at the moment Patroni is asked to move a leader |
 
@@ -50,8 +65,9 @@ Four rules follow from the constraints above, and each is a step someone skips:
 
 - **The primary is patched last, and only after a switchover.** A switchover is a
   controlled handover with no `ttl` to wait out, measured at ~2s in
-  [`SLA.md`](../SLA.md#per-failure-mode). Restarting the primary directly costs an
-  election instead.
+  [`SLA.md`](../SLA.md#per-failure-mode). Restarting the primary directly *risks*
+  an election instead — measured at two in three attempts, which is worse than a
+  certainty would be: a mistake that usually looks harmless keeps being made.
 - **Restarts go through Patroni, not around it.** `patronictl restart` tells
   Patroni what is about to happen; `systemctl restart` does not. This is the
   single most common mistake made by an operator who knows PostgreSQL but not
@@ -93,6 +109,39 @@ It forks [Lab 5](../lab5/README.md), for two things it needs:
 - **A monitoring stack** with sixteen alert rules, nine of them watched firing
   with measured latencies, and delivery asserted by reading a real mailbox.
   Without it, AC-8 cannot be asked.
+
+## Running it
+
+```sh
+make all      # build, start the stack, run every check, report
+make check    # re-run the checks against a cluster that is already up
+make clean    # destroy the VMs and generated files -- but NOT the backups
+```
+
+`make help` lists every target and is the authority; this file does not repeat
+the list, because a copied list is one that goes stale.
+
+The patching phases run last in `make check`, after everything else has shown the
+cluster healthy. They are the most destructive in the series — one deliberately
+blocks writes and forces an election — so running them against an already-suspect
+cluster would produce failures belonging to neither. Individually:
+
+| Target | Proves |
+| --- | --- |
+| `make test_patch_standby` | AC-3, AC-7 — one standby, patched through Patroni |
+| `make test_patch_unsafe` | AC-2 — both wrong moves, performed and costed |
+| `make test_patch_cycle` | AC-1 — the full four-step cycle, client committing |
+| `make test_patch_kernel` | AC-4 — a kernel change and an unattended reboot |
+| `make test_patch_dcs` | AC-5 — etcd and Patroni, a member at a time |
+| `make test_patch_rollback` | AC-6 — a failed upgrade rolled back |
+| `make test_patch_quiet` | AC-8 — a correct cycle that wakes nobody |
+
+Every phase levels its own preconditions: they downgrade, or pick a node with a
+kernel gap, so that each can run twice. A phase that only works on a freshly
+built cluster cannot live in a suite.
+
+Lab 5's 25-minute alert-coverage induction is **not** in the default path — this
+lab's subject is patching — and stays available as `make test_alert_coverage`.
 
 ## Acceptance criteria
 

@@ -14,8 +14,8 @@ It produces two things, and everything here serves one of them.
 
 | Deliverable | What it is | Where it lives | How far along |
 | --- | --- | --- | --- |
-| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 5 of 8 built |
-| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 9 drilled, 1 reasoned, no stubs left |
+| **A validated design** | The architecture to build for production, with evidence for each claim instead of assertions | the lab guides, plus [`SLA.md`](SLA.md) | 6 of 8 built |
+| **An operations runbook** | Procedures for whoever ends up carrying the pager, each labelled with how far it has actually been proven | [`RUNBOOKS.md`](RUNBOOKS.md) | 10 drilled, 1 reasoned, no stubs left |
 
 Each stage is a lab: a self-contained cluster that builds from nothing with two
 commands and tests its own claims with executable checks. The labs are the
@@ -34,14 +34,14 @@ point of the exercise.
 | [3](lab3/README.md) | Durable backups — pgBackRest **and** `pg_dump`, to an off-host MinIO repository, encrypted, over TLS | **Built and verified** |
 | [4](lab4/README.md) | Recovery at every blast radius: replace a node, restore beside a live cluster, rewind it, or rebuild from nothing | **Built and verified** — all eight criteria, including recovery from total loss and the three fails-closed controls |
 | [5](lab5/README.md) | Monitoring with Grafana LGTM and Alloy: every injectable fault detected, with measured latency | **Built and verified** — all five criteria; nine alerts watched firing, 130s to 260s |
-| [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | Specified |
+| [6](lab6/README.md) | Patching and minor-version upgrades: the rolling order, and the measured cost of getting it wrong | **Built and verified** — all eight criteria; a full rolling upgrade in 67s with zero failed transactions, and correct maintenance proven to wake nobody |
 | [7](lab7/README.md) | Schema migration with Flyway — no downtime, and what survives a failover mid-migration | Specified |
 | [8](lab8/README.md) | Undoing a migration that succeeded and was wrong: by table, or by rewinding the cluster | Specified |
 
-Labs 6 to 8 are complete designs with acceptance criteria, written before
+Labs 7 and 8 are complete designs with acceptance criteria, written before
 building so the criteria cannot quietly reshape themselves around whatever
 happened. **They claim no results.** Labs 3, 4 and 5 were written the same way and
-have since been built; their criteria are unchanged from before the work started,
+have since been built, as has Lab 6; their criteria are unchanged from before the work started,
 which is the point of writing them first.
 
 The order is deliberate, and it answers *what would you most regret not having*
@@ -169,7 +169,7 @@ needs that they do not have — the list this proof of concept exists to produce
 | **Disk encryption keys** | A root-only keyfile on the node itself | KMS, TPM or network-bound unlock. Today a stolen *disk* is safe and a stolen *node* is not |
 | **Client failover** | Npgsql's `Target Session Attributes=primary` | The same capability in every language in the estate, or a proxy tier. Putting failover in the client obliges every client to honour it |
 | **Monitoring** | Built in [Lab 5](lab5/README.md): Grafana, Mimir, Loki and a standalone Alertmanager off-host, sixteen alert rules, delivery proven by reading the mail | Alerting that reaches a human on a rota, rather than a local mailbox, and a stack that is itself redundant |
-| **Patching and upgrades** | Designed but unbuilt — [Lab 6](lab6/README.md) | A rehearsed rolling procedure for PostgreSQL minor versions, Patroni, etcd and the OS. The operation the team performs most often, and the one this cluster's own constraints make easiest to get wrong |
+| **Patching and upgrades** | Built and verified in [Lab 6](lab6/README.md): the rolling order, each wrong move costed, and a VERIFIED runbook | A rehearsed rolling procedure for PostgreSQL minor versions, Patroni, etcd and the OS. The operation the team performs most often, and the one this cluster's own constraints make easiest to get wrong |
 | **Break-glass** | Not implemented | A named, audited `operator` identity, with an offline copy that works when the identity provider does not |
 
 ## The cluster

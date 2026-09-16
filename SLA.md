@@ -170,9 +170,37 @@ redundant. Rejoining the lost node takes longer and does not block writes.
 | PostgreSQL killed, Patroni alive | **0** | ~10–25s | ≤ 120 events/yr | measured |
 | Patroni frozen, PostgreSQL serving | **0** | ~25–60s | ≤ 50 events/yr | measured |
 | Node isolated from etcd | **0** — demotes rather than diverging | ~10s to demote; no cluster outage | n/a | measured |
-| Planned switchover | **0** | ~2s to move the leader | n/a — scheduled | measured, n = 1 |
+| Planned switchover | **0** | ~2–4s to move the leader | n/a — scheduled | measured |
+| Planned maintenance: a full rolling minor upgrade | **0** | **~67s** across three nodes, **zero failed transactions** | n/a — scheduled | measured in [Lab 6](lab6/README.md) |
 | Every standby lost at once | **0** | writes block until a standby returns | [the decision](#the-exception-being-closed) | **measured** |
 | Corruption, deletion, bad migration | **≤ 60s**, bounded by `archive_timeout` — not by backup age | **0s to ~7s of downtime**, by rung — see below | **not established** | both measured; RPO in [Lab 3](lab3/README.md), RTO in [Lab 4](lab4/README.md) |
+
+### Planned maintenance, which is the row a change board actually asks about
+
+A complete rolling minor upgrade of all three nodes — the four-step order in
+[Lab 6](lab6/README.md), with the real Npgsql client committing throughout —
+costs **67s** end to end and **zero failed transactions**. The steps within it:
+each standby 15–23s, the switchover 3–4s, the old primary 22s.
+
+That number is for a lab database. What does *not* scale with the database is the
+shape: a minor upgrade replaces binaries and restarts, so the per-node cost is
+dominated by restart time rather than by data size. What does scale is anything
+that moves the data directory, which is why the rollback below matters.
+
+**The cost of getting the order wrong**, measured rather than asserted:
+
+| Wrong move | Cost |
+| --- | --- |
+| Patching both standbys at once | **writes refused for ~132s**, until a standby returned. Refused, never lost — `synchronous_mode_strict` is what makes that distinction |
+| Restarting the primary directly | **an election, in two attempts out of three** — 5–13s and a promotion, against ~2–4s for a switchover |
+| A failed upgrade, rolled back | **15s** by `dnf downgrade`, with no rebuild. Rung 1 rebuilds the same node in 4s on a lab database, but moves the entire 256 MB data directory: the rollback's cost is fixed at the size of the packages, a rebuild's grows with the database |
+
+The second row is the uncomfortable one, and it has a consequence for on-call
+rather than for capacity planning. An unnecessary election resolves faster than
+every threshold in the ruleset, so **no alert fires for it**. It is real,
+client-visible, and invisible to monitoring — which means the ordering rules are
+enforced by procedure, not by being watched. A correct cycle, by contrast, was
+measured to raise nothing at all: maintenance does not page.
 
 ### The last row, measured at both ends
 
