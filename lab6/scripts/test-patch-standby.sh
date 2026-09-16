@@ -26,6 +26,7 @@ readonly VM_NAMES=(lab6-pg1 lab6-pg2 lab6-pg3)
 readonly VM_PREFIX="lab6-"
 readonly STANZA=lab6
 readonly PATRONI_CONFIG=/etc/patroni/patroni.yml
+readonly BUILD_VERSION="${LAB6_PG_VERSION:-18.4}"
 readonly TARGET_VERSION="${LAB6_PG_TARGET_VERSION:-18.6}"
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
@@ -50,23 +51,45 @@ running_version() { on "$1" sudo -u postgres psql -tAc 'SHOW server_version' 2>/
 installed_version() { on "$1" rpm -q --qf '%{VERSION}' percona-postgresql18-server 2>/dev/null; }
 
 echo
-echo "=== A settled cluster, every node on the version it was built with ==="
+echo "=== A settled cluster, and a standby below the upgrade version ==="
 cluster="$(patroni_json)" || { echo "  FAIL: no Patroni cluster answered" >&2; exit 1; }
 leader="$(jq -r '.[] | select(.Role == "Leader") | .Member' <<< "$cluster")"
 [[ -n "$leader" ]] || { echo "  FAIL: no leader" >&2; exit 1; }
-target="$(jq -r --arg l "$leader" '.[] | select(.Role != "Leader") | .Member' <<< "$cluster" | head -1)"
-echo "  leader is $leader; patching standby $target"
-
-built_version="$(installed_version "$VM_PREFIX$leader")"
+# EVERY node is levelled to the build version, not just the target. Stepping back
+# only the standby leaves the leader on the new version, so upgrading the standby
+# produces a cluster where both run the same thing -- and the mixed-version
+# assertion below, which is half the point of this phase, has nothing to observe.
+#
+# Standalone on a fresh build this is a no-op. Inside `make check`, after phases
+# that leave every node upgraded, it is what makes the phase repeatable. Setup
+# belongs in the phase rather than in the operator's head.
 for m in $(jq -r '.[].Member' <<< "$cluster"); do
-  v="$(installed_version "$VM_PREFIX$m")"
-  [[ "$v" == "$built_version" ]] \
-    && pass "$m is on $v" \
-    || fail "$m is on $v but the cluster was built on $built_version"
+  if [[ "$(installed_version "$VM_PREFIX$m")" != "$BUILD_VERSION" ]]; then
+    echo "  $m is on $(installed_version "$VM_PREFIX$m"); stepping it back to $BUILD_VERSION"
+    on "$VM_PREFIX$m" sudo dnf -y downgrade \
+      "percona-postgresql18-server-${BUILD_VERSION}*" "percona-postgresql18-${BUILD_VERSION}*" \
+      "percona-postgresql18-contrib-${BUILD_VERSION}*" "percona-postgresql18-libs-${BUILD_VERSION}*" >/dev/null 2>&1
+    on "$VM_PREFIX$(jq -r '.[] | select(.Role | test("Leader")) | .Member' <<< "$(patroni_json)")" \
+      sudo -u postgres patronictl -c "$PATRONI_CONFIG" restart "$STANZA" "$m" --force >/dev/null 2>&1
+    for _ in {1..60}; do
+      [[ "$(jq -r --arg m "$m" '.[] | select(.Member == $m) | .State' <<< "$(patroni_json)")" =~ ^(streaming|running)$ ]] && break
+      sleep 3
+    done
+  fi
 done
-[[ "$built_version" != "$TARGET_VERSION" ]] \
-  && pass "the target $TARGET_VERSION is not what is installed, so this is a real upgrade" \
-  || fail "already on $TARGET_VERSION: there is nothing to patch, and this phase proves nothing"
+
+# Re-read: levelling the leader can in principle move the key, and every step
+# below is written in terms of who holds it now.
+cluster="$(patroni_json)"
+leader="$(jq -r '.[] | select(.Role | test("Leader")) | .Member' <<< "$cluster")"
+target="$(jq -r '.[] | select(.Role | test("Leader") | not) | .Member' <<< "$cluster" | head -1)"
+built_version="$(installed_version "$VM_PREFIX$target")"
+for m in $(jq -r '.[].Member' <<< "$cluster"); do
+  [[ "$(installed_version "$VM_PREFIX$m")" == "$BUILD_VERSION" ]] \
+    && pass "$m is on $BUILD_VERSION" \
+    || fail "$m is on $(installed_version "$VM_PREFIX$m"), so the cluster is not level"
+done
+echo "  leader is $leader; patching standby $target"
 
 # The leader key, not merely the leader's name. A leader that steps down and is
 # re-elected has the same name and a different key holder, and only the DCS can

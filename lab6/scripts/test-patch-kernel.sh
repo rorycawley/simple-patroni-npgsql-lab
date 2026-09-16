@@ -55,7 +55,28 @@ echo
 echo "=== A newer kernel must actually exist, or this phase proves nothing ==="
 cluster="$(patroni_json)" || { echo "  FAIL: no Patroni cluster answered" >&2; exit 1; }
 leader="$(leader_of "$cluster")"
-target="$(jq -r '.[] | select(.Role | test("Leader") | not) | .Member' <<< "$cluster" | head -1)"
+# The standby with a kernel gap, not simply the first one. After an earlier run
+# a node is already on the newest kernel, and picking it blind made the phase
+# refuse -- correctly, but it made the suite unrepeatable. Kernel upgrades do not
+# remove the old kernel, so a node that has been through this phase keeps both.
+newest_kernel="$(on "$VM_PREFIX$leader" sudo dnf -q repoquery --latest-limit=1 --qf '%{version}-%{release}' kernel 2>/dev/null | tr -d '[:space:]')"
+target=""
+for cand in $(jq -r '.[] | select(.Role | test("Leader") | not) | .Member' <<< "$cluster"); do
+  running="$(on "$VM_PREFIX$cand" uname -r)"
+  [[ "$running" != "$newest_kernel"* ]] && { target="$cand"; break; }
+done
+if [[ -z "$target" ]]; then
+  # Every standby already runs the newest kernel. Rather than skip the criterion,
+  # manufacture the gap the way the plan says to: boot one back onto the older
+  # kernel that is still installed, so there is a real change to make.
+  target="$(jq -r '.[] | select(.Role | test("Leader") | not) | .Member' <<< "$cluster" | head -1)"
+  older="$(on "$VM_PREFIX$target" rpm -q --qf '%{VERSION}-%{RELEASE}\n' kernel 2>/dev/null | sort -V | head -1)"
+  echo "  every standby is on the newest kernel; booting $target back onto $older to make a gap"
+  on "$VM_PREFIX$target" sudo grubby --set-default "/boot/vmlinuz-${older}.aarch64" >/dev/null 2>&1
+  on "$VM_PREFIX$target" sudo systemctl reboot >/dev/null 2>&1 &
+  sleep 45
+  for _ in {1..40}; do on "$VM_PREFIX$target" true >/dev/null 2>&1 && break; sleep 5; done
+fi
 echo "  leader is $leader; rebooting standby $target"
 
 running_kernel="$(on "$VM_PREFIX$target" uname -r)"
