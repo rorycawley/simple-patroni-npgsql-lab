@@ -192,7 +192,7 @@ that moves the data directory, which is why the rollback below matters.
 | Wrong move | Cost |
 | --- | --- |
 | Patching both standbys at once | **writes refused for ~132s**, until a standby returned. Refused, never lost — `synchronous_mode_strict` is what makes that distinction |
-| Restarting the primary directly | **an election, in two attempts out of three** — 5–13s and a promotion, against ~2–4s for a switchover |
+| Restarting the primary directly | **an election in 6 of 9 restarts** — 5–13s and a promotion, against ~2–4s for a switchover. Three runs of three landed 3, 2 and 1: a gamble on where the restart falls in Patroni's 10s `loop_wait`, not a certainty |
 | A failed upgrade, rolled back | **15s** by `dnf downgrade`, with no rebuild. Rung 1 rebuilds the same node in 4s on a lab database, but moves the entire 256 MB data directory: the rollback's cost is fixed at the size of the packages, a rebuild's grows with the database |
 
 The second row is the uncomfortable one, and it has a consequence for on-call

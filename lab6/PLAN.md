@@ -391,20 +391,32 @@ passed.
 | The block, first attempt | **6 of 7**, 19 minutes. The one failure was a defect in P2's test, not in the lab |
 | P2 alone, after that fix | **PASS** in 6m46s, against a cluster the whole block had just churned |
 | The block, second attempt | Killed by the host for low memory during P2. Not a verdict |
+| The block, third attempt | **GREEN — 7 of 7 in 18m42s**, one uninterrupted sequence, on a host left otherwise idle |
 
-The hang is fixed and proven twice: P2 returned in **7m26s** and **6m46s** where
-the old form had to be killed. It now issues `pg_ctl stop` and lets Patroni do
-the starting — the more faithful simulation anyway, since the operator's mistake
-is taking PostgreSQL away from Patroni, and what happens next is Patroni's
-decision, which is the thing being measured.
+The green run's own measurements, none of which contradict what is recorded
+above: the cycle at **55s** with **196 transactions and zero failed**, a
+scheduled backup again colliding with the window and completing, the rollback at
+**31s**, and a correct cycle leaving the mailbox empty — **0 notifications** over
+a 58s window. `WritesBlockedOnSyncReplication` fired at **131s** against a warm
+ruler, matching the figure recorded above exactly.
 
-**The remaining gap is one uninterrupted sequence, and it is blocked by host RAM
-rather than by the lab.** Lab 6 allocates 14GiB of VM on a 16GB host and runs
-five observability containers on top. That kill landed in a passive polling wait
-with the cluster already restored, and `patronictl list` showed one leader and
-two streaming standbys afterwards — but that was luck. A kill during P6, which
-replaces PostgreSQL's binaries with a stub, leaves a node needing repair. A run
-needs the machine to itself.
+The hang is fixed and proven three times: P2 returned in **7m26s**, **6m46s** and
+**6m11s** where the old form had to be killed at 88 minutes. It now issues
+`pg_ctl stop` and lets Patroni do the starting — the more faithful simulation
+anyway, since the operator's mistake is taking PostgreSQL away from Patroni, and
+what happens next is Patroni's decision, which is the thing being measured.
+
+**A run needs the machine to itself, and that is a real precondition rather than
+advice.** Lab 6 allocates 14GiB of VM on a 16GB host and runs five observability
+containers on top; the killed attempt began at roughly 60MB free, and the green
+one at 33% free. The kill landed in a passive polling wait with the cluster
+already restored — but that was luck. A kill during P6, which replaces
+PostgreSQL's binaries with a stub, leaves a node needing repair.
+
+**What is NOT proven is a full 31-phase `make check` end to end.** The 24 phases
+ahead of the patching block are inherited from Lab 5 and unmodified since they
+passed, so the risk is low — but it is not zero, and it is not the same claim as
+the one made above.
 
 ### Two defects this found, both in instruments rather than in the cluster
 
