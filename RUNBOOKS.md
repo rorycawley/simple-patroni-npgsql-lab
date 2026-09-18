@@ -712,8 +712,9 @@ to `streaming` before touching the next.
 
 This procedure is one step of a patch cycle rather than the whole of it. The full
 rolling sequence — standbys first, switchover, then the old primary, and what
-each wrong order costs — is designed in [Lab 6](lab6/README.md) and is not yet
-rehearsed, which is why there is no runbook for it here.
+each wrong order costs — is rehearsed in [Lab 6](lab6/README.md) and written up
+as [runbook 8a](#8a-patch-the-cluster-a-rolling-minor-upgrade), immediately
+below.
 
 ---
 

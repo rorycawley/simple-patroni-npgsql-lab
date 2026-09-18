@@ -204,14 +204,34 @@ echo
 attempts=3
 elections=0
 restarts=0
-alerts_before=""
+
+# The baseline has to SETTLE before it is taken, or it is guaranteed to change.
+# Wrong move 1 leaves WritesBlockedOnSyncReplication and a PatroniNotScrapable
+# per downed standby still firing; they resolve on Alertmanager's own schedule,
+# somewhere inside the next few minutes -- which is exactly the window wrong move
+# 2 runs in. Snapshotting at attempt 1 therefore captured three alerts that were
+# always going to disappear, and the disappearance was then reported as "something
+# fired". Wait for silence, and if silence never comes, say so: a baseline that is
+# still moving cannot support a claim about what fired against it.
+echo "  waiting for wrong move 1's alerts to clear before measuring this one..."
+alerts_before="unsettled"
+for _ in {1..40}; do
+  alerts_before="$(curl -s --max-time 12 "$MIMIR/prometheus/api/v1/alerts" 2>/dev/null \
+    | jq -r '[.data.alerts[]? | select(.state == "firing") | .labels.alertname] | sort | join(",")')"
+  [[ -z "$alerts_before" ]] && break
+  sleep 15
+done
+if [[ -n "$alerts_before" ]]; then
+  fail "the ruleset never went quiet after wrong move 1 (still firing: $alerts_before); this measurement cannot be made against a moving baseline"
+else
+  pass "the ruleset is quiet, so anything firing after this restart is this restart's doing"
+fi
+
 for attempt in $(seq 1 $attempts); do
   before="$(patroni_json)"
   leader2="$(leader_of "$before")"
   tl_before="$(jq -r --arg l "$leader2" '.[] | select(.Member == $l) | .TL' <<< "$before")"
   start_before="$(sql "$VM_PREFIX$leader2" "SELECT pg_postmaster_start_time()")"
-  [[ $attempt == 1 ]] && alerts_before="$(curl -s --max-time 12 "$MIMIR/prometheus/api/v1/alerts" 2>/dev/null \
-    | jq -r '[.data.alerts[]? | select(.state == "firing") | .labels.alertname] | sort | join(",")')"
 
   elect_start=$SECONDS
   # BOUNDED. `pg_ctl restart` waits for the postmaster to come back, and Patroni
@@ -293,11 +313,22 @@ echo "  checking the uncomfortable half: did anything alert?"
 sleep 60
 alerts_after="$(curl -s --max-time 12 "$MIMIR/prometheus/api/v1/alerts" 2>/dev/null \
   | jq -r '[.data.alerts[]? | select(.state == "firing") | .labels.alertname] | sort | join(",")')"
-if [[ "$alerts_after" == "$alerts_before" ]]; then
+# The claim is one-directional: nothing NEW fired. An alert that was up and has
+# since gone down is the cluster recovering from wrong move 1, not this restart
+# raising something -- and an equality test calls that a failure, which is the
+# same defect that comparing COUNTS had, surviving the move to names. Only names
+# present AFTER and absent BEFORE can answer AC-8's question.
+appeared=""
+for name in ${alerts_after//,/ }; do
+  [[ ",$alerts_before," == *",$name,"* ]] || appeared+="$name "
+done
+if [[ -z "$appeared" ]]; then
   pass "no alert fired, as named in advance: an unnecessary election is INVISIBLE to monitoring"
   echo "         The maintenance runbook cannot tell an operator they would have been paged."
+  [[ "$alerts_after" != "$alerts_before" ]] && \
+    echo "         (alerting went [${alerts_before:-none}] -> [${alerts_after:-none}]: resolved, not raised)"
 else
-  fail "alerting changed from [${alerts_before:-none}] to [${alerts_after:-none}]; something fired that was not named"
+  fail "these alerts fired and were not named in advance: ${appeared% }"
   curl -s --max-time 12 "$MIMIR/prometheus/api/v1/alerts" 2>/dev/null \
     | jq -r '.data.alerts[]? | select(.state == "firing") | "      firing: \(.labels.alertname)"'
 fi

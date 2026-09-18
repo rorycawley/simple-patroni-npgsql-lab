@@ -272,6 +272,17 @@ do_start() {
 
   docker_ network create "$NET" >/dev/null 2>&1
 
+  # A STOPPED container still owns its name. `running` above only looks for
+  # running ones, so a stack stopped without being removed -- a host reboot, or
+  # Docker Desktop quitting -- leaves five `Exited` containers behind, every
+  # `docker run` below fails with "container name is already in use", and the
+  # only symptom is the readiness timeout 120 seconds later. That message sends
+  # you to `docker logs lab6-mimir`, which faithfully prints the previous run's
+  # logs: it reads as a stack that started and misbehaved rather than one that
+  # never started at all. Remove them first -- start is about to recreate them.
+  docker_ rm -f lab6-grafana lab6-loki lab6-mimir lab6-mailpit lab6-alertmanager \
+    >>"$LOG_FILE" 2>&1 || true
+
   docker_ run -d --name lab6-mimir --network "$NET" \
     -p "${MIMIR_PORT}:${MIMIR_PORT}" \
     -v "$CONF_DIR/mimir.yaml:/etc/mimir/mimir.yaml:ro" \
@@ -334,6 +345,22 @@ AMCFG
     -e GF_FEATURE_TOGGLES_ENABLE=alertingSimplifiedRouting \
     -v "$CONF_DIR/provisioning:/etc/grafana/provisioning:ro" \
     "$GRAFANA_IMAGE" >>"$LOG_FILE" 2>&1
+
+  # A container that never started cannot become ready, and waiting 120s to
+  # discover that reports a timeout where the truth is a failed `docker run`.
+  # Check the end state rather than five exit codes: it catches any reason a
+  # container is absent, and names the ones that are.
+  local missing=""
+  local name
+  for name in lab6-mimir lab6-loki lab6-mailpit lab6-alertmanager lab6-grafana; do
+    docker_ ps -q -f "name=^${name}$" -f status=running | grep -q . || missing+=" $name"
+  done
+  if [[ -n "$missing" ]]; then
+    echo "These containers did not start:${missing}" >&2
+    echo "The last lines of $LOG_FILE say why:" >&2
+    tail -5 "$LOG_FILE" >&2
+    return 1
+  fi
 
   # Rules are part of the stack, not a manual step. An alert that exists only
   # because someone remembered to curl it in is not monitoring.

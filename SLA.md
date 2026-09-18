@@ -397,9 +397,11 @@ a database.
   switchover — 2s to move the leader, an order of magnitude faster than an
   election, as expected from a controlled handover with no `ttl` to wait out. One
   observation is not a distribution, and a switchover under write load will be
-  slower. The cost of a *complete* patch cycle across three nodes, which is the
-  figure a change-advisory board asks for, is what
-  [Lab 6](lab6/README.md) is designed to supply.
+  slower. The cost of a *complete* patch cycle across three nodes — the figure a
+  change-advisory board asks for — is now measured in
+  [Lab 6](lab6/README.md) and carried in the table above, but it is likewise a
+  handful of observations on an idle cluster rather than a distribution under
+  load.
 - **The application tier.** Everything here stops at the database.
 - **Sustained load.** RTO is measured idle; promotion under heavy write load has
   more WAL to replay and will be slower.

@@ -375,23 +375,68 @@ characterised.
 
 All eight phases pass **individually**, and their measurements are recorded above.
 
-A full `make check` has **not** yet completed clean. The first attempt was 32
-passed / 3 failed, and every failure was a phase that could not run twice — those
-are fixed and re-run green. The second attempt aborted in P2 on an infrastructure
-hang, not a cluster fault:
+A full `make check` has **not** completed clean. The first attempt was 32 passed
+/ 3 failed, every failure a phase that could not run twice — fixed and re-run
+green. The second aborted in P2 on an infrastructure hang, not a cluster fault:
+`limactl shell` does not return when its remote command is killed, and one such
+hang ran for 88 minutes with the guest process already gone.
 
-> `limactl shell` does not return when its remote command is killed. `pg_ctl
-> restart` waits for the postmaster while Patroni races to start it, the two
-> deadlock, and bounding the guest side with `timeout` is not enough — the host
-> side hung for 88 minutes with the guest process already gone.
+The seven patching phases — the tail of the suite, and the only part that has
+changed — have since been run **back to back**, which is what those attempts left
+open. Everything before them is inherited from Lab 5 and unmodified since it
+passed.
 
-P2 now issues `pg_ctl stop` and lets Patroni do the starting: verified to return
-in **0s** where the old form hung, and it is the more faithful simulation anyway,
-since the operator's mistake is taking PostgreSQL away from Patroni and what
-happens next is Patroni's decision — which is the thing being measured.
+| Run | Result |
+| --- | --- |
+| The block, first attempt | **6 of 7**, 19 minutes. The one failure was a defect in P2's test, not in the lab |
+| P2 alone, after that fix | **PASS** in 6m46s, against a cluster the whole block had just churned |
+| The block, second attempt | Killed by the host for low memory during P2. Not a verdict |
 
-**What remains unproven is the suite, not the lab.** One clean end-to-end
-`make check` would close it, and that is the first thing to run next.
+The hang is fixed and proven twice: P2 returned in **7m26s** and **6m46s** where
+the old form had to be killed. It now issues `pg_ctl stop` and lets Patroni do
+the starting — the more faithful simulation anyway, since the operator's mistake
+is taking PostgreSQL away from Patroni, and what happens next is Patroni's
+decision, which is the thing being measured.
+
+**The remaining gap is one uninterrupted sequence, and it is blocked by host RAM
+rather than by the lab.** Lab 6 allocates 14GiB of VM on a 16GB host and runs
+five observability containers on top. That kill landed in a passive polling wait
+with the cluster already restored, and `patronictl list` showed one leader and
+two streaming standbys afterwards — but that was luck. A kill during P6, which
+replaces PostgreSQL's binaries with a stub, leaves a node needing repair. A run
+needs the machine to itself.
+
+### Two defects this found, both in instruments rather than in the cluster
+
+**The monitoring stack could not restart itself.** `observability.sh` checked for
+*running* containers, but a stopped container still owns its name — so after the
+host rebooted, all five `docker run` calls failed with "name already in use" and
+the only symptom was a readiness timeout two minutes later, pointing at
+`docker logs lab6-mimir`, which faithfully printed the *previous* run's logs. It
+reads as a stack that started and misbehaved rather than one that never started.
+Stale containers are now removed first, and a container that did not start is
+reported as itself.
+
+**P2's silence check failed on alerts RESOLVING.** It reported `something fired
+that was not named` when alerting went from three alerts to none. That is the
+same defect this phase was already fixed for once: the fix moved it from
+comparing alert *counts* to comparing alert *names* but kept `==`, so it stayed
+symmetric — and the other half of that fix, settling to silence before taking a
+baseline, was never actually implemented. The baseline was snapshotted while
+wrong move 1's alerts were still firing, so it was guaranteed to change whatever
+wrong move 2 did. Both halves are now real: a bounded wait for silence that
+**fails loudly if silence never comes**, and a one-directional set difference,
+verified against a new alert from silence, a new alert beside an existing one,
+and one-resolved-while-another-fired.
+
+### A measurement trap worth recording
+
+`WritesBlockedOnSyncReplication` fired at **281s** on a monitoring stack started
+four minutes earlier, and at **131s** on the same cluster once it was warm.
+Mimir's ruler needs continuous data across the rule's window, and a cold stack
+has none. The 131s recorded above is the true figure. The inflated one looks
+exactly like a regression, and the obvious response to it — amending a correct
+recorded measurement to match a bad reading — is the wrong one.
 
 ## Risks
 
